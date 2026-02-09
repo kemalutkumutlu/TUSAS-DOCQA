@@ -47,12 +47,12 @@ class RAGPipeline:
     _index: Optional[LocalIndex] = None
     _all_chunks: List[Chunk] = field(default_factory=list)
 
-    def add_document(self, file_path: Path) -> DocumentState:
+    def add_document(self, file_path: Path, display_name: Optional[str] = None) -> DocumentState:
         """
         Ingest a document, build structure, create chunks, and rebuild index.
         Returns the document state.
         """
-        ingest = ingest_any(file_path, ocr=self.ocr_config)
+        ingest = ingest_any(file_path, ocr=self.ocr_config, display_name=display_name)
         root = build_section_tree(ingest)
         chunks = section_tree_to_chunks(ingest, root)
 

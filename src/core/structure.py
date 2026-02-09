@@ -285,7 +285,53 @@ def section_tree_to_chunks(
     chunks: list[Chunk] = []
 
     def add_section(node: SectionNode) -> None:
+        # Include root preface content if present.
+        # This matters for documents that contain important metadata BEFORE the first numbered heading
+        # (e.g., delivery time, estimated work hours on page 1).
         if node.section_id == "root":
+            root_text = node.full_text().strip()
+            # If root has no body, full_text() is just the filename; skip indexing it.
+            if root_text != ingest.file_name.strip():
+                parent_chunk_id = f"{ingest.doc_id}:{node.section_id}:parent"
+                chunks.append(
+                    Chunk(
+                        chunk_id=parent_chunk_id,
+                        doc_id=ingest.doc_id,
+                        file_name=ingest.file_name,
+                        section_id=node.section_id,
+                        parent_id=node.parent_id,
+                        heading_path=node.heading_path,
+                        page_start=node.page_start,
+                        page_end=node.page_end,
+                        text=root_text,
+                        kind="parent",
+                    )
+                )
+
+                child_texts = _split_text_semantically(
+                    root_text,
+                    max_chars=child_max_chars,
+                    overlap_chars=child_overlap_chars,
+                )
+                if not child_texts:
+                    child_texts = [root_text]
+
+                for idx, ct in enumerate(child_texts):
+                    chunks.append(
+                        Chunk(
+                            chunk_id=f"{ingest.doc_id}:{node.section_id}:child:{idx:04d}",
+                            doc_id=ingest.doc_id,
+                            file_name=ingest.file_name,
+                            section_id=node.section_id,
+                            parent_id=node.section_id,
+                            heading_path=node.heading_path,
+                            page_start=node.page_start,
+                            page_end=node.page_end,
+                            text=ct,
+                            kind="child",
+                        )
+                    )
+
             for ch in node.children:
                 add_section(ch)
             return

@@ -201,6 +201,16 @@ def _count_list_items(text: str) -> int:
     structural patterns in a section text.
     """
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return 0
+
+    # Ignore the first line if it looks like a section heading/title.
+    # Parent chunks usually start with the section title (e.g., "2. Foo").
+    first = lines[0]
+    if re.match(r"^(\d+(?:\.\d+)*[.\)]\s|[A-Z]\.\d+(?:\.\d+)*\s)", first) or len(lines) > 1:
+        lines = lines[1:]
+    if not lines:
+        return 0
 
     count = 0
 
@@ -212,43 +222,87 @@ def _count_list_items(text: str) -> int:
     if count >= 2:
         return count
 
-    # 2) Table-row heuristic: lines that are short standalone labels
-    #    followed by longer description lines (key-value table pattern).
-    #    For PDF tables extracted as text, each "row" often appears as
-    #    a short label line followed by a description line.
-    #    E.g.:
-    #       Belge Yükleme
-    #       Kullanıcı PDF ve resim formatlarında belge yükleyebilmeli.
-    short_lines = []
-    for i, ln in enumerate(lines):
-        # A "label" line: short, doesn't end with sentence punctuation,
-        # and is followed by a longer line (or is at the end).
-        is_short = len(ln) < 50
-        no_sent_punct = not ln.endswith((".", "!", "?", ":", ";"))
-        starts_upper = ln[0:1].isupper() if ln else False
-        if is_short and no_sent_punct and starts_upper:
-            # Check the next line is longer (description)
-            if i + 1 < len(lines) and len(lines[i + 1]) > len(ln):
-                short_lines.append(ln)
-            elif i + 1 >= len(lines):
-                short_lines.append(ln)
+    # 1.5) Indexed-table heuristic (purely structural):
+    # Many PDF tables extract into patterns like:
+    #   1
+    #   DEVLOG.md
+    #   Description...
+    #   2
+    #   TESTING.md
+    #   Description...
+    #
+    # We count the number of numeric row indices that are followed by a non-numeric label.
+    idx_rows = 0
+    i = 0
+    while i < len(lines) - 1:
+        a = lines[i].strip()
+        b = lines[i + 1].strip()
+        if re.match(r"^\d{1,3}$", a) and not re.match(r"^\d{1,3}$", b):
+            # Basic sanity: label shouldn't be extremely long
+            if 2 <= len(b) <= 120:
+                idx_rows += 1
+                i += 2
+                continue
+        i += 1
 
-    # Filter out heading-like lines (the section title itself)
-    # by removing the first line if it looks like a heading
-    if short_lines and lines and short_lines[0] == lines[0]:
-        short_lines = short_lines[1:]
+    if idx_rows >= 3:
+        return idx_rows
 
-    # Also filter known non-data labels (table headers like "İşlev", "Beklenen Davranış")
-    # We'll keep them if there are at least 3 (likely actual data rows)
-    if len(short_lines) >= 2:
-        return len(short_lines)
+    # 2) Table-like row heuristic (purely structural, no vocabulary lists):
+    #    Count patterns like:
+    #      <short label line>
+    #      <longer description line>
+    #
+    # High-confidence only: if we detect fewer than 3 rows, return 0 to avoid false alarms.
+    def _token_count(s: str) -> int:
+        return len([t for t in re.split(r"\s+", s.strip()) if t])
+
+    def _looks_like_label(s: str) -> bool:
+        if not (3 <= len(s) <= 60):
+            return False
+        if s.endswith((".", "!", "?", ":", ";")):
+            return False
+        if re.match(r"^\d+$", s):  # pure number lines are often table row indices
+            return False
+        # Labels tend to be short phrases (few tokens)
+        return _token_count(s) <= 7
+
+    def _looks_like_description(s: str) -> bool:
+        # Descriptions tend to be longer and/or sentence-like.
+        if len(s) >= 80:
+            return True
+        if _token_count(s) >= 10:
+            return True
+        if any(p in s for p in (".", ";", ":")) and _token_count(s) >= 6:
+            return True
+        return False
+
+    rows = 0
+    i = 0
+    while i < len(lines) - 1:
+        a = lines[i]
+        b = lines[i + 1]
+
+        # Structural header guard: if we see multiple short lines in a row, it's likely a header block.
+        if _looks_like_label(a) and _looks_like_label(b) and not _looks_like_description(b):
+            i += 1
+            continue
+
+        if _looks_like_label(a) and _looks_like_description(b):
+            rows += 1
+            i += 2
+        else:
+            i += 1
+
+    if rows >= 3:
+        return rows
 
     # 3) Count sub-section headings within the text
     heading_count = 0
     for ln in lines:
         if re.match(r"^[A-Z0-9]+\.\d+", ln) or re.match(r"^\d+\.\d+", ln):
             heading_count += 1
-    if heading_count >= 2:
+    if heading_count >= 3:
         return heading_count
 
     return count

@@ -30,7 +30,7 @@ def _configure_tesseract(tesseract_cmd: Optional[str]) -> None:
         return
 
 
-def ingest_pdf(path: Path, ocr: OCRConfig) -> IngestResult:
+def ingest_pdf(path: Path, ocr: OCRConfig, display_name: Optional[str] = None) -> IngestResult:
     """
     Extract page-bounded text from a PDF.
 
@@ -43,7 +43,9 @@ def ingest_pdf(path: Path, ocr: OCRConfig) -> IngestResult:
     _configure_tesseract(ocr.tesseract_cmd)
 
     doc_id = sha256_file(path)
-    file_name = path.name
+    # Chainlit uploads can be stored under a temporary UUID-like filename.
+    # `display_name` lets callers preserve the original user-facing filename for citations.
+    file_name = display_name or path.name
     warnings: list[str] = []
     pages: list[PageText] = []
 
@@ -91,7 +93,7 @@ def ingest_pdf(path: Path, ocr: OCRConfig) -> IngestResult:
     return IngestResult(doc_id=doc_id, file_name=file_name, pages=pages, warnings=warnings)
 
 
-def ingest_image(path: Path, ocr: OCRConfig) -> IngestResult:
+def ingest_image(path: Path, ocr: OCRConfig, display_name: Optional[str] = None) -> IngestResult:
     """OCR a single image file into one 'page'."""
     if not path.exists():
         raise FileNotFoundError(str(path))
@@ -99,7 +101,7 @@ def ingest_image(path: Path, ocr: OCRConfig) -> IngestResult:
     _configure_tesseract(ocr.tesseract_cmd)
 
     doc_id = sha256_file(path)
-    file_name = path.name
+    file_name = display_name or path.name
     warnings: list[str] = []
 
     text_norm = ""
@@ -127,11 +129,11 @@ def ingest_image(path: Path, ocr: OCRConfig) -> IngestResult:
     return IngestResult(doc_id=doc_id, file_name=file_name, pages=pages, warnings=warnings)
 
 
-def ingest_any(path: Path, ocr: OCRConfig) -> IngestResult:
+def ingest_any(path: Path, ocr: OCRConfig, display_name: Optional[str] = None) -> IngestResult:
     suffix = path.suffix.lower()
     if suffix == ".pdf":
-        return ingest_pdf(path, ocr=ocr)
+        return ingest_pdf(path, ocr=ocr, display_name=display_name)
     if suffix in (".png", ".jpg", ".jpeg"):
-        return ingest_image(path, ocr=ocr)
+        return ingest_image(path, ocr=ocr, display_name=display_name)
     raise ValueError(f"Unsupported file type: {suffix}")
 

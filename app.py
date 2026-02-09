@@ -58,7 +58,7 @@ async def _process_uploaded_file(file_path: str, file_name: str) -> str:
     path = Path(file_path)
 
     try:
-        state = pipeline.add_document(path)
+        state = pipeline.add_document(path, display_name=file_name)
         lines = [
             f"**{file_name}** basariyla yuklendi ve indekslendi.",
             f"- Sayfa sayisi: {state.page_count}",
@@ -124,7 +124,7 @@ def _process_uploaded_file_sync(file_path: str, file_name: str) -> str:
     path = Path(file_path)
 
     try:
-        state = pipeline.add_document(path)
+        state = pipeline.add_document(path, display_name=file_name)
         lines = [
             f"**{file_name}** basariyla yuklendi ve indekslendi.",
             f"- Sayfa sayisi: {state.page_count}",

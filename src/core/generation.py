@@ -86,6 +86,9 @@ def _count_answer_items(answer: str) -> int:
         line = line.strip()
         if re.match(r"^(\d+[\.\)]\s|[-•*]\s|[a-zA-Z][\.\)]\s)", line):
             count += 1
+        # Also count simple "Label: ..." lines (common for table-to-list answers)
+        elif re.match(r"^[^:\n]{2,80}:\s+.+", line):
+            count += 1
     return count
 
 
