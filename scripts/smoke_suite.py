@@ -27,7 +27,12 @@ def main() -> int:
         chroma_dir=settings.chroma_dir,
         gemini_api_key=settings.gemini_api_key,
         gemini_model=settings.gemini_model,
-        ocr_config=OCRConfig(enabled=True, lang="tur+eng", tesseract_cmd=settings.tesseract_cmd),
+        ocr_config=OCRConfig(
+            enabled=True,
+            lang="tur+eng",
+            tesseract_cmd=settings.tesseract_cmd,
+            tessdata_prefix=settings.tessdata_prefix,
+        ),
         vlm_config=VLMConfig(api_key=settings.gemini_api_key, model=settings.gemini_model, mode="off"),
     )
 

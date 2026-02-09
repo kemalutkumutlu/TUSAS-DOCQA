@@ -72,8 +72,16 @@ class LocalIndex:
         # Chroma returns list-of-lists
         return list(res.get("ids", [[]])[0])
 
-    def sparse_search(self, query: str, top_k: int) -> List[str]:
-        return [cid for cid, _ in self.bm25.search(query, top_k=top_k)]
+    @staticmethod
+    def _where_doc_ids(doc_ids: Set[str]) -> Optional[dict]:
+        if not doc_ids:
+            return None
+        if len(doc_ids) == 1:
+            return {"doc_id": next(iter(doc_ids))}
+        return {"$or": [{"doc_id": did} for did in sorted(doc_ids)]}
+
+    def sparse_search(self, query: str, top_k: int, *, doc_ids: Optional[Set[str]] = None) -> List[str]:
+        return [cid for cid, _ in self.bm25.search(query, top_k=top_k, doc_ids=doc_ids)]
 
     def hybrid_search(
         self,
@@ -81,9 +89,19 @@ class LocalIndex:
         dense_k: int = 10,
         sparse_k: int = 10,
         final_k: int = 10,
+        *,
+        doc_ids: Optional[Set[str]] = None,
     ) -> HybridResult:
-        dense_ids = self.dense_search(query, top_k=dense_k)
-        sparse_ids = self.sparse_search(query, top_k=sparse_k)
+        doc_ids_use: Optional[Set[str]] = None
+        if doc_ids:
+            # Only allow doc_ids that belong to this index instance.
+            filtered = set(doc_ids) & set(self.allowed_doc_ids)
+            if filtered:
+                doc_ids_use = filtered
+
+        where = self._where_doc_ids(doc_ids_use) if doc_ids_use else None
+        dense_ids = self.dense_search(query, top_k=dense_k, where=where)
+        sparse_ids = self.sparse_search(query, top_k=sparse_k, doc_ids=doc_ids_use)
         fused = rrf_fuse(dense_ids=dense_ids, sparse_ids=sparse_ids)
         top = fused[:final_k]
         ids = [cid for cid, _ in top]

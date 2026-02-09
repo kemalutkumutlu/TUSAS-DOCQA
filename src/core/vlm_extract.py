@@ -55,7 +55,8 @@ def extract_text_from_image(image: Image.Image, cfg: VLMConfig) -> str:
     resp = client.models.generate_content(
         model=cfg.model,
         contents=[
-            types.Part.from_text(_EXTRACT_ONLY_PROMPT),
+            # google-genai requires keyword-only args here (positional raises TypeError)
+            types.Part.from_text(text=_EXTRACT_ONLY_PROMPT),
             types.Part.from_bytes(data=img_bytes, mime_type="image/png"),
         ],
         config=types.GenerateContentConfig(

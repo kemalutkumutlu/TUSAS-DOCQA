@@ -48,7 +48,12 @@ def main() -> int:
     settings.chroma_dir.mkdir(parents=True, exist_ok=True)
 
     print("[1/4] Ingesting document...")
-    ocr = OCRConfig(enabled=True, lang="tur+eng", tesseract_cmd=settings.tesseract_cmd)
+    ocr = OCRConfig(
+        enabled=True,
+        lang="tur+eng",
+        tesseract_cmd=settings.tesseract_cmd,
+        tessdata_prefix=settings.tessdata_prefix,
+    )
     ingest = ingest_any(Path(args.path), ocr=ocr)
 
     print("[2/4] Building index...")

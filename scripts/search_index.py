@@ -35,7 +35,12 @@ def main() -> int:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.chroma_dir.mkdir(parents=True, exist_ok=True)
 
-    ocr = OCRConfig(enabled=True, lang="tur+eng", tesseract_cmd=settings.tesseract_cmd)
+    ocr = OCRConfig(
+        enabled=True,
+        lang="tur+eng",
+        tesseract_cmd=settings.tesseract_cmd,
+        tessdata_prefix=settings.tessdata_prefix,
+    )
     ingest = ingest_any(Path(args.path), ocr=ocr)
     root = build_section_tree(ingest)
     chunks = section_tree_to_chunks(ingest, root)

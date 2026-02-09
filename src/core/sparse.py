@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from rank_bm25 import BM25Okapi
 
@@ -47,18 +47,35 @@ class BM25Index:
         bm25 = BM25Okapi(toks)
         return cls(tokens_by_id=dict(zip(ids, toks)), bm25=bm25, ids=ids)
 
-    def search(self, query: str, top_k: int) -> List[Tuple[str, float]]:
+    def search(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        doc_ids: Optional[Set[str]] = None,
+    ) -> List[Tuple[str, float]]:
         q = simple_tokenize(query)
         if not q or not self.ids:
             return []
         scores = self.bm25.get_scores(q)
-        # top_k indices by score
-        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+
+        # Optional doc filter (used for multi-doc session isolation).
+        prefixes: Optional[tuple[str, ...]] = None
+        if doc_ids:
+            prefixes = tuple(f"{did}:" for did in sorted(doc_ids))
+
+        # Rank all indices by score, then filter while collecting top_k matches.
+        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
         out: List[Tuple[str, float]] = []
         for i in ranked:
             s = float(scores[i])
             if s <= 0:
                 continue
-            out.append((self.ids[i], s))
+            cid = self.ids[i]
+            if prefixes is not None and not cid.startswith(prefixes):
+                continue
+            out.append((cid, s))
+            if len(out) >= top_k:
+                break
         return out
 

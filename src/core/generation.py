@@ -42,6 +42,15 @@ Hiçbirini atlama. Eğer bağlamda {expected} adet madde varsa, cevabında da en
 {expected} adet madde olmalıdır.
 """
 
+_CHAT_SYSTEM_PROMPT = """\
+Sen yardımcı bir asistansın.
+
+Kurallar:
+- Normal sohbet edebilirsin (selamlaşma, hal hatır, genel sorular).
+- Bu modda "belge içeriğine dayanarak" iddia üretme; belge soruları için kullanıcıdan belge moduna geçmesini iste.
+- Gereksiz yere kaynak/citation yazma.
+"""
+
 
 # ── Context builder ──────────────────────────────────────────────────────────
 
@@ -103,6 +112,27 @@ class GenerationResult:
     context_preview: str  # first N chars of context (for debug)
 
 
+def generate_chat_answer(
+    query: str,
+    gemini_api_key: str,
+    gemini_model: str = "gemini-2.0-flash",
+) -> str:
+    """
+    Chat-only generation (no retrieval, no citations).
+    """
+    client = genai.Client(api_key=gemini_api_key)
+    resp = client.models.generate_content(
+        model=gemini_model,
+        contents=f"SORU: {query}",
+        config=types.GenerateContentConfig(
+            system_instruction=_CHAT_SYSTEM_PROMPT,
+            temperature=0.4,
+            max_output_tokens=1024,
+        ),
+    )
+    return (resp.text or "").strip() or "Anlayamadım, tekrar eder misin?"
+
+
 # ── Main generation function ─────────────────────────────────────────────────
 
 def generate_answer(
@@ -143,7 +173,7 @@ def generate_answer(
         f"SORU: {query}"
     )
 
-    def _call(system_instruction: str, user_contents: str, temperature: float) -> str:
+    def _call(system_instruction: str, user_contents: str, temperature: float, max_tokens: int = 4096) -> str:
         client = genai.Client(api_key=gemini_api_key)
         response = client.models.generate_content(
             model=gemini_model,
@@ -151,7 +181,7 @@ def generate_answer(
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 temperature=temperature,
-                max_output_tokens=4096,
+                max_output_tokens=max_tokens,
             ),
         )
         return response.text or ""
@@ -161,7 +191,14 @@ def generate_answer(
     answer = _call(system, user_message, temperature=0.1) or "Belgede bu bilgi bulunamadı."
 
     # Count citations in the answer
-    citations_found = len(re.findall(r"\[.+?-\s*Sayfa\s*\d+", answer))
+    # Accept a few common citation renderings:
+    # - [File - Sayfa 1]
+    # - [File / Sayfa 1]
+    # - [File | Sayfa 1]
+    # - [File / 1]
+    citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+        re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+    )
 
     # If citations are missing, do one strict retry to enforce formatting.
     if citations_found == 0 and retrieval.evidences and answer.strip() != "Belgede bu bilgi bulunamadı.":
@@ -176,7 +213,9 @@ def generate_answer(
         answer_retry = _call(system_retry, user_message, temperature=0.0).strip()
         if answer_retry:
             answer = answer_retry
-            citations_found = len(re.findall(r"\[.+?-\s*Sayfa\s*\d+", answer))
+            citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+                re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+            )
 
     # Coverage post-check
     coverage_actual: Optional[int] = None
@@ -184,6 +223,26 @@ def generate_answer(
     if coverage_expected is not None:
         coverage_actual = _count_answer_items(answer)
         coverage_ok = coverage_actual >= coverage_expected
+
+        # If coverage failed, do one strict retry to force completeness (quality-first).
+        if not coverage_ok and retrieval.evidences and answer.strip() != "Belgede bu bilgi bulunamadı.":
+            system_retry2 = (
+                system
+                + "\n\nKAPSAM DÜZELTME MODU:\n"
+                + f"- Bağlamda {coverage_expected} madde tespit edildi.\n"
+                + f"- Cevabında EN AZ {coverage_expected} madde/satır olmalı.\n"
+                + "- Her maddeyi ayrı satırda ver.\n"
+                + "- Özetleme yapma; bağlamdaki öğeleri tek tek dök.\n"
+                + "- Her satırın sonunda kaynak formatı olsun: [DosyaAdı - Sayfa X]\n"
+            )
+            answer_retry2 = _call(system_retry2, user_message, temperature=0.0).strip()
+            if answer_retry2:
+                answer = answer_retry2
+                citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+                    re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+                )
+                coverage_actual = _count_answer_items(answer)
+                coverage_ok = coverage_actual >= coverage_expected
 
         # If coverage failed, append a warning to the answer
         if not coverage_ok:

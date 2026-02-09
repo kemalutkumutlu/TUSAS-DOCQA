@@ -6,6 +6,7 @@ Run:
 """
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -26,6 +27,118 @@ ACCEPTED_MIME = [
     "image/jpeg",
 ]
 
+_SMALLTALK_PATTERNS = [
+    # Turkish
+    r"^(merhaba|selam|slm|selamlar)\b",
+    r"\bnasılsın\b|\bnaber\b|\bnasılsınız\b",
+    r"^(teşekkür(ler)?|tesekkur(ler)?|sağ ol|sagol|eyvallah|rica ederim)\b",
+    r"^(günaydın|iyi akşamlar|iyi geceler|iyi günler)\b",
+    r"\bkimsin\b|\bsen kimsin\b|\bne yapıyorsun\b",
+    # Follow-up smalltalk / compliments (keep conservative: mostly standalone)
+    r"\bben\s+nas\w*ls\w*m\b",
+    r"\bsorm\w*\s+m\w*s\w*n\b",  # "sormicak mısın / sormayacak mısın" etc.
+    r"^(aferin|bravo|helal|tebrik(ler)?|güzel|guzel|iyi\s*i[şs])\b",
+    # English
+    r"^(hi|hello|hey)\b",
+    r"\bhow are you\b|\bhow's it going\b",
+    r"^(thanks|thank you)\b",
+    r"\bwho are you\b",
+]
+
+_CHAT_MODE_REQUEST_PATTERNS = [
+    # Turkish
+    r"\bsohbet\s+modu\b",
+    r"\bsohbet\s+moduna\b.*\b(geç|gec|aç|ac)\w*\b",
+    r"\bchat\s+modu\b",
+    r"\bchat\s+moduna\b.*\b(geç|gec)\w*\b",
+    r"\bsohbete\b.*\b(geç|gec)\w*\b",
+    # English
+    r"\bchat\s+mode\b",
+    r"\bswitch\s+to\s+chat\b",
+]
+
+_DOC_CUE_PATTERNS = [
+    r"\bbelge\b|\bdoküman\b|\bdokuman\b|\bpdf\b|\bdosya\b",
+    r"\bsayfa\b|\bbaşlık\b|\bbölüm\b|\bmadde\b|\biçerik\b|\bicerik\b",
+    r"\bnelerdir\b|\blistele\b|\bsırala\b|\bsirala\b|\bhepsi\b|\btümü\b|\btumu\b",
+]
+
+_DOC_MODE_REQUEST_PATTERNS = [
+    # Turkish
+    r"\bbelge\s+modu\b|\bdoküman\s+modu\b|\bdokuman\s+modu\b",
+    r"\bbelge\s+moduna\b.*\b(dön|don|geç|gec)\w*\b",
+    r"\bbelge\s+moduna\s+nasıl\b|\bbelge\s+moduna\s+nas\w*l\b",
+    r"\bbelge\s+moduna\s+nas\w*l\s+d\w*n\w*",
+    # English
+    r"\bdoc\s+mode\b|\bdocument\s+mode\b",
+]
+
+
+def _looks_like_doc_mode_request(query: str) -> bool:
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    for pat in _DOC_MODE_REQUEST_PATTERNS:
+        if re.search(pat, q, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def _looks_like_chat_mode_request(query: str) -> bool:
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    for pat in _CHAT_MODE_REQUEST_PATTERNS:
+        if re.search(pat, q, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def _looks_like_doc_switch(query: str, pipeline: RAGPipeline) -> bool:
+    """
+    Heuristic to auto-switch from chat → doc when the user asks about documents.
+    Conservative by design: only triggers if there are loaded documents AND the
+    message contains clear document cues or mentions a loaded filename.
+    """
+    if not pipeline or not pipeline.has_documents:
+        return False
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+
+    # Filename mention is a strong signal.
+    try:
+        for name in pipeline.list_documents():
+            if name and name.lower() in q:
+                return True
+    except Exception:
+        pass
+
+    # Otherwise require explicit document cue words.
+    for pat in _DOC_CUE_PATTERNS[:2]:
+        if re.search(pat, q, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def _looks_like_smalltalk(query: str) -> bool:
+    """
+    Answer small-talk in chat mode even during doc sessions.
+    Document-agnostic: uses only surface-form heuristics and avoids triggering
+    when the message contains obvious document cues.
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    for pat in _DOC_CUE_PATTERNS:
+        if re.search(pat, q, flags=re.IGNORECASE):
+            return False
+    if len(q) <= 80:
+        for pat in _SMALLTALK_PATTERNS:
+            if re.search(pat, q, flags=re.IGNORECASE):
+                return True
+    return False
+
 
 def _get_pipeline() -> RAGPipeline:
     """Get or lazily create the pipeline stored in the user session."""
@@ -44,11 +157,14 @@ def _get_pipeline() -> RAGPipeline:
                 enabled=True,
                 lang="tur+eng",
                 tesseract_cmd=settings.tesseract_cmd,
+                tessdata_prefix=settings.tessdata_prefix,
             ),
             vlm_config=VLMConfig(
                 api_key=settings.gemini_api_key,
                 model=settings.gemini_model,
-                mode="auto",
+                # Quality-first: always extract via VLM (extract-only prompt).
+                # This is more robust for complex layouts (tables/multi-column/CVs).
+                mode="force",
             ),
         )
         cl.user_session.set("pipeline", pipeline)
@@ -83,6 +199,7 @@ async def _process_uploaded_file(file_path: str, file_name: str) -> str:
 @cl.on_chat_start
 async def on_chat_start():
     settings = load_settings()
+    cl.user_session.set("mode", "doc")
 
     if settings.llm_provider != "gemini" or not settings.gemini_api_key:
         await cl.Message(
@@ -99,7 +216,11 @@ async def on_chat_start():
         content=(
             "Belge Analiz ve Soru-Cevap Sistemine Hosgeldiniz!\n\n"
             "Lutfen analiz etmek istediginiz belgeyi yukleyin "
-            "(PDF, PNG veya JPG)."
+            "(PDF, PNG veya JPG).\n\n"
+            "Komutlar:\n"
+            "- `/chat`: Sohbet modu (belge olmadan)\n"
+            "- `/doc`: Belge modu\n"
+            "- `/use <dosya>`: Aktif belgeyi seç"
         ),
         accept=ACCEPTED_MIME,
         max_size_mb=50,
@@ -147,6 +268,7 @@ def _process_uploaded_file_sync(file_path: str, file_name: str) -> str:
 @cl.on_message
 async def on_message(message: cl.Message):
     pipeline: RAGPipeline | None = cl.user_session.get("pipeline")
+    mode: str = cl.user_session.get("mode") or "doc"  # "doc" | "chat"
 
     # Check for file attachments in the message
     if message.elements:
@@ -161,14 +283,94 @@ async def on_message(message: cl.Message):
                 # Refresh pipeline reference
                 pipeline = cl.user_session.get("pipeline")
 
-    if not pipeline or not pipeline.has_documents:
-        await cl.Message(
-            content="Henuz belge yuklenmedi. Lutfen once bir belge yukleyin."
-        ).send()
-        return
-
     query = message.content.strip()
     if not query:
+        return
+
+    # Natural-language mode switches (work in any mode).
+    if _looks_like_chat_mode_request(query) or query.strip().lower() in ("/chat", "/sohbet"):
+        cl.user_session.set("mode", "chat")
+        await cl.Message(content="Sohbet moduna geçildi. Belge soruları için `/doc` yazabilirsin.").send()
+        return
+    if _looks_like_doc_mode_request(query) or query.strip().lower() in ("/doc", "/belge"):
+        cl.user_session.set("mode", "doc")
+        # Don't force-create pipeline; just guide the user.
+        if pipeline and pipeline.has_documents:
+            await cl.Message(content="Belge moduna geçildi. Belge sorunu sorabilirsin. (Sohbet için `/chat` yazabilirsin.)").send()
+        else:
+            await cl.Message(content="Belge moduna geçildi. Devam etmek için lütfen bir PDF/PNG/JPG yükle. (Sohbet için `/chat` yazabilirsin.)").send()
+        return
+
+    # Auto small-talk: answer conversational messages even in doc mode.
+    if _looks_like_smalltalk(query):
+        if not pipeline:
+            pipeline = _get_pipeline()
+        thinking_msg = cl.Message(content="Dusunuyorum...")
+        await thinking_msg.send()
+        try:
+            answer = await cl.make_async(pipeline.chat)(query)
+        except Exception as e:
+            await cl.Message(content=f"Hata: {e}").send()
+            return
+        await thinking_msg.remove()
+        await cl.Message(content=answer).send()
+        return
+
+    # Commands (document-agnostic)
+    qlow = query.lower()
+    if qlow.startswith("/use "):
+        if not pipeline:
+            pipeline = _get_pipeline()
+        name = query[5:].strip()
+        ok = pipeline.set_active_document(name)
+        if ok:
+            await cl.Message(content=f"Aktif belge ayarlandı: **{name}**").send()
+        else:
+            docs = pipeline.list_documents() if pipeline else []
+            await cl.Message(content=f"Belge bulunamadı: **{name}**\nMevcut belgeler: {', '.join(docs) if docs else '(yok)'}").send()
+        return
+
+    # Ensure pipeline exists
+    if not pipeline:
+        pipeline = _get_pipeline()
+
+    # Chat mode does not require documents
+    mode = cl.user_session.get("mode") or mode
+    if mode == "chat":
+        # If user is asking how to return to doc mode, switch and guide.
+        if _looks_like_doc_mode_request(query):
+            cl.user_session.set("mode", "doc")
+            if pipeline.has_documents:
+                await cl.Message(
+                    content="Belge moduna geçildi. Belge sorunu sorabilirsin. (İstersen `/chat` ile tekrar sohbet moduna dönebilirsin.)"
+                ).send()
+            else:
+                await cl.Message(
+                    content="Belge moduna geçildi. Devam etmek için lütfen bir PDF/PNG/JPG yükle. (Sohbet için `/chat` yazabilirsin.)"
+                ).send()
+            return
+
+        # Auto-switch to doc if message clearly refers to a loaded document.
+        if _looks_like_doc_switch(query, pipeline):
+            cl.user_session.set("mode", "doc")
+            mode = "doc"
+        else:
+            thinking_msg = cl.Message(content="Dusunuyorum...")
+            await thinking_msg.send()
+            try:
+                answer = await cl.make_async(pipeline.chat)(query)
+            except Exception as e:
+                await cl.Message(content=f"Hata: {e}").send()
+                return
+            await thinking_msg.remove()
+            await cl.Message(content=answer).send()
+            return
+
+    # Doc mode requires documents
+    if not pipeline.has_documents:
+        await cl.Message(
+            content="Henuz belge yuklenmedi. Lutfen once bir belge yukleyin. (Sohbet için `/chat` yazabilirsin.)"
+        ).send()
         return
 
     # Show thinking indicator
@@ -187,6 +389,7 @@ async def on_message(message: cl.Message):
 
     # Add debug info as a collapsible section
     debug_lines = [
+        f"- **Mod**: {mode}",
         f"- **Intent**: {result.intent}",
         f"- **Citation sayisi**: {result.citations_found}",
     ]

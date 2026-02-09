@@ -25,6 +25,7 @@ class Settings:
     chroma_dir: Path
 
     tesseract_cmd: Optional[str]
+    tessdata_prefix: Optional[str]
 
 
 def load_settings() -> Settings:
@@ -39,6 +40,7 @@ def load_settings() -> Settings:
     chroma_dir = Path(os.getenv("CHROMA_DIR", str(data_dir / "chroma")))
 
     tesseract_cmd = os.getenv("TESSERACT_CMD", "").strip() or None
+    tessdata_prefix = os.getenv("TESSDATA_PREFIX", "").strip() or None
 
     return Settings(
         llm_provider=llm_provider,
@@ -50,5 +52,6 @@ def load_settings() -> Settings:
         data_dir=data_dir,
         chroma_dir=chroma_dir,
         tesseract_cmd=tesseract_cmd,
+        tessdata_prefix=tessdata_prefix,
     )
 

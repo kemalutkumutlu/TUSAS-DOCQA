@@ -20,6 +20,16 @@ _SECTION_LIST_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"(altında(ki)?|içindeki)\s+(tüm|her|bütün)", re.IGNORECASE),
     re.compile(r"(tüm|bütün|hepsi|eksiksiz)\s+.*(madde|gereksinim|başlık|teslimat|adım)", re.IGNORECASE),
     re.compile(r"kaç\s+(madde|gereksinim|başlık|teslimat|adım)", re.IGNORECASE),
+    # "X başlığı/bölümü altındakiler" style requests
+    re.compile(
+        r"(başlığ\w*|bölüm\w*|kısm\w*)\s+.*(altında\w*|içinde\w*|altındak\w*|içindek\w*)",
+        re.IGNORECASE,
+    ),
+    # "hepsini/tamamını ver" when it's clearly asking for all details/items
+    re.compile(
+        r"(bilgi(leri|sini|lerinin)|madde(leri|sini|lerinin)|satır(ları|larını))\s+.*(hepsini|tamamını|tümünü)\s+(ver|yaz|göster)",
+        re.IGNORECASE,
+    ),
     # English
     re.compile(r"what\s+are\s+(the|all)", re.IGNORECASE),
     re.compile(r"list\s+(all|the|every)", re.IGNORECASE),
@@ -331,6 +341,7 @@ def retrieve(
     dense_k: int = 10,
     sparse_k: int = 10,
     final_k: int = 8,
+    doc_id: Optional[str] = None,
 ) -> RetrievalResult:
     """
     Full retrieval pipeline with query routing.
@@ -344,7 +355,14 @@ def retrieve(
     intent = classify_query(query)
 
     # Always start with hybrid search to locate the best section
-    hybrid = index.hybrid_search(query, dense_k=dense_k, sparse_k=sparse_k, final_k=final_k)
+    doc_ids = {doc_id} if doc_id else None
+    hybrid = index.hybrid_search(
+        query,
+        dense_k=dense_k,
+        sparse_k=sparse_k,
+        final_k=final_k,
+        doc_ids=doc_ids,
+    )
 
     if not hybrid.ids:
         return RetrievalResult(
