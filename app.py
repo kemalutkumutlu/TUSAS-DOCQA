@@ -211,37 +211,16 @@ async def on_chat_start():
         ).send()
         return
 
-    # Ask for file upload
-    files = await cl.AskFileMessage(
+    # Do NOT block the chat by forcing an upload modal.
+    # Users should be able to type immediately (/chat) and upload anytime via drag&drop/paperclip.
+    await cl.Message(
         content=(
             "Belge Analiz ve Soru-Cevap Sistemine Hosgeldiniz!\n\n"
-            "Lutfen analiz etmek istediginiz belgeyi yukleyin "
-            "(PDF, PNG veya JPG).\n\n"
-            "Komutlar:\n"
-            "- `/chat`: Sohbet modu (belge olmadan)\n"
-            "- `/doc`: Belge modu\n"
-            "- `/use <dosya>`: Aktif belgeyi seç"
-        ),
-        accept=ACCEPTED_MIME,
-        max_size_mb=50,
-        max_files=5,
-    ).send()
-
-    if not files:
-        await cl.Message(content="Dosya yuklenmedi. Lutfen bir dosya yukleyin.").send()
-        return
-
-    # Process each file
-    msg = cl.Message(content="Belgeler isleniyor, lutfen bekleyin...")
-    await msg.send()
-
-    results = []
-    for f in files:
-        status = await cl.make_async(_process_uploaded_file_sync)(f.path, f.name)
-        results.append(status)
-
-    await cl.Message(
-        content="\n\n".join(results) + "\n\nArtik belgeleriniz hakkinda sorular sorabilirsiniz!"
+            "- Belge yüklemek için PDF/PNG/JPG dosyasını sürükleyip bırakabilir veya ek (paperclip) ikonuyla yükleyebilirsin.\n"
+            "- Belge olmadan sohbet etmek için: `/chat`\n"
+            "- Belge soruları için: `/doc`\n"
+            "- Birden fazla belge varsa aktif belge seçmek için: `/use <dosya>`\n"
+        )
     ).send()
 
 

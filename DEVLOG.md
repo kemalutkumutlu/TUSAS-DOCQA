@@ -67,7 +67,8 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
 
 ## Faz 6 — Chainlit UI
 - `app.py` tam pipeline'a baglandi:
-  - `on_chat_start`: `AskFileMessage` ile PDF/PNG/JPG yukleme (max 50MB, 5 dosya)
+  - `on_chat_start`: uygulama acilir acilmaz mesaj yazilabilir (upload modal zorunlu degil)
+  - Belge yukleme: drag&drop / paperclip ile PDF/PNG/JPG
   - Dosya isleme: async wrapper ile UI donmaz
   - `on_message`: pipeline.ask() ile soru-cevap
   - Debug bilgisi: collapsible section (intent, citation sayisi, coverage durumu)

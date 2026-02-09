@@ -58,7 +58,14 @@ GEMINI_MODEL=gemini-2.0-flash
 chainlit run app.py -w
 ```
 
-Tarayicida `http://localhost:8000` adresini acin. Belge yukleyin ve soru sormaya baslayin.
+Tarayicida `http://localhost:8000` adresini acin.
+
+**Not:** Uygulama acilir acilmaz direkt yazabilirsiniz (belge yuklemek zorunlu degil).
+
+- Belge yuklemek icin PDF/PNG/JPG dosyasini **surukleyip birakabilir** veya **paperclip** ikonuyla yukleyebilirsiniz.
+- Belge olmadan sohbet icin: `/chat`
+- Belge sorulari icin: `/doc`
+- Birden fazla belge varsa aktif belge secmek icin: `/use <dosya>`
 
 ## Proje Yapisi
 
