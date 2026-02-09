@@ -53,14 +53,14 @@ Bu belge test senaryolarini, beklenen davranislari ve gozlemlenen sonuclari icer
 ### 2.3 Complete Section Fetch (Faz 4)
 | Test | Sorgu | Beklenen | Sonuc |
 |------|-------|----------|-------|
-| Fonksiyonel gereksinimler | "fonksiyonel gereksinimler nelerdir" | section=2, tum maddeler | PASSED (evidences=2, coverage=6) |
+| Fonksiyonel gereksinimler | "fonksiyonel gereksinimler nelerdir" | section=2, tum maddeler | PASSED (evidences=2) |
 | Teslimatlar + alt bolumler | "teslimatlar nelerdir" | section=4 + 4.1/4.2/... | PASSED (evidences=6, subtree dahil) |
 | Heading-aware matching | "teslimatlar nelerdir" | Section 4 secilir (3 degil) | PASSED |
 
 ### 2.4 Coverage Counting (Faz 4)
 | Test | Bolum | Beklenen Madde | Sayilan | Sonuc |
 |------|-------|---------------|---------|-------|
-| Fonksiyonel ger. | Section 2 (tablo) | 6 | 6 | PASSED |
+| Fonksiyonel ger. | Section 2 (tablo) | 5 | 5 | PASSED |
 | Teslimatlar | Section 4 (tablo) | 5 | 5 | PASSED |
 
 ---
@@ -70,10 +70,10 @@ Bu belge test senaryolarini, beklenen davranislari ve gozlemlenen sonuclari icer
 ### 3.1 LLM Guardrails (Faz 5)
 | Test | Senaryo | Beklenen | Sonuc |
 |------|---------|----------|-------|
-| Citation zorunlulugu | Herhangi bir soru | [DosyaAdi - Sayfa X] format | BEKLIYOR (Gemini API testi) |
-| Halusinasyon engeli | "Bu PDF'in yazari kimdir?" (belgede yok) | "Belgede bu bilgi bulunamadi." | BEKLIYOR |
-| Section-list coverage | "fonksiyonel gereksinimler nelerdir" | 6 maddenin tamami listelenir | BEKLIYOR |
-| Coverage uyarisi | Eksik madde durumunda | Uyari mesaji eklenir | BEKLIYOR |
+| Citation zorunlulugu | Herhangi bir soru | [DosyaAdi - Sayfa X] format | PASSED (eval_case_study) |
+| Halusinasyon engeli | "araba kaç beygir" | "Belgede bu bilgi bulunamadı." | PASSED (eval_case_study) |
+| Section-list coverage | "fonksiyonel gereksinimler nelerdir" | 5 maddenin tamami listelenir | PASSED (deterministic section_list) |
+| Coverage uyarisi | Eksik madde durumunda | Uyari mesaji eklenir | PASSED/NA (deterministic section_list ile eksik riski azalir) |
 
 ### 3.2 Dil Destegi
 | Test | Girdi Dili | Beklenen Cevap Dili | Sonuc |

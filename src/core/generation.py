@@ -10,6 +10,7 @@ Responsibilities:
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -84,6 +85,227 @@ def _build_context(evidences: List[Evidence]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
+# ── Deterministic section-list rendering (doc-agnostic) ───────────────────────
+
+def _extract_file_name_from_heading_path(heading_path: str) -> str:
+    """
+    heading_path is built as: "<file_name> / <heading> / <subheading> ..."
+    """
+    hp = (heading_path or "").strip()
+    if " / " in hp:
+        return hp.split(" / ", 1)[0].strip() or "Belge"
+    return hp or "Belge"
+
+
+def _strip_leading_heading_line(text: str) -> list[str]:
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return []
+    # Parent chunks usually start with the section title.
+    return lines[1:] if len(lines) > 1 else []
+
+
+def _extract_numbered_or_bulleted(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    for ln in lines:
+        if re.match(r"^(\d+[\.\)]\s+|[a-zA-Z][\.\)]\s+|[-•*]\s+)", ln):
+            out.append(ln)
+    return out
+
+
+def _extract_indexed_table_rows(lines: list[str]) -> list[str]:
+    """
+    Handle PDF table extraction patterns like:
+      1
+      LABEL
+      description...
+      2
+      LABEL2
+      description...
+    """
+    items: list[str] = []
+    i = 0
+    while i < len(lines):
+        if re.match(r"^\d{1,3}$", lines[i].strip()):
+            j = i + 1
+            if j >= len(lines):
+                break
+            label = lines[j].strip()
+            if re.match(r"^\d{1,3}$", label) or not (2 <= len(label) <= 140):
+                i += 1
+                continue
+            k = j + 1
+            desc_parts: list[str] = []
+            while k < len(lines) and not re.match(r"^\d{1,3}$", lines[k].strip()):
+                desc_parts.append(lines[k].strip())
+                k += 1
+            desc = " ".join([p for p in desc_parts if p]).strip()
+            if desc:
+                items.append(f"{label}: {desc}")
+            else:
+                items.append(label)
+            i = k
+            continue
+        i += 1
+    return items
+
+
+def _extract_label_desc_pairs(lines: list[str]) -> list[str]:
+    def _tok(s: str) -> int:
+        return len([t for t in re.split(r"\s+", s.strip()) if t])
+
+    def _looks_like_label(s: str) -> bool:
+        if not (3 <= len(s) <= 60):
+            return False
+        if s.endswith((".", "!", "?", ":", ";")):
+            return False
+        if re.match(r"^\d+$", s):
+            return False
+        return _tok(s) <= 7
+
+    def _looks_like_desc(s: str) -> bool:
+        if len(s) >= 80:
+            return True
+        if _tok(s) >= 10:
+            return True
+        if any(p in s for p in (".", ";", ":")) and _tok(s) >= 6:
+            return True
+        return False
+
+    # Drop a likely two-column table header if detected.
+    # Pattern: two short "label-like" lines followed by another label and a description.
+    # This is doc-agnostic (no vocabulary) and prevents headers from becoming items.
+    if len(lines) >= 4:
+        if _looks_like_label(lines[0]) and _looks_like_label(lines[1]) and _looks_like_label(lines[2]) and (
+            _looks_like_desc(lines[3]) or len(lines[3]) >= 40
+        ):
+            lines = lines[2:]
+
+    items: list[str] = []
+    i = 0
+    while i < len(lines) - 1:
+        label = lines[i].strip()
+        if not _looks_like_label(label):
+            i += 1
+            continue
+
+        # Collect multi-line descriptions until the next label-like line starts a new row.
+        j = i + 1
+        desc_parts: list[str] = []
+        while j < len(lines):
+            s = lines[j].strip()
+            if not s:
+                j += 1
+                continue
+            if _looks_like_label(s) and desc_parts:
+                break
+            desc_parts.append(s)
+            j += 1
+
+        desc = " ".join([p for p in desc_parts if p]).strip()
+        if desc and (_looks_like_desc(desc) or len(desc_parts) >= 1):
+            # Skip probable table header pairs like "ColumnA: ColumnB"
+            # where both sides look like short labels, not descriptions.
+            if len(desc_parts) == 1 and _looks_like_label(desc_parts[0]) and not _looks_like_desc(desc_parts[0]):
+                i = j
+                continue
+            items.append(f"{label}: {desc}")
+            i = j
+        else:
+            i += 1
+
+    return items
+
+
+def _extract_subheadings(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    for ln in lines:
+        if re.match(r"^[A-Z0-9]+\.\d+", ln) or re.match(r"^\d+\.\d+", ln):
+            out.append(ln)
+    return out
+
+
+def _extract_section_list_items(section_text: str) -> list[str]:
+    """
+    Document-agnostic extraction of list/table rows from a section's parent text.
+    """
+    lines = _strip_leading_heading_line(section_text)
+    if not lines:
+        return []
+
+    # 1) Bullets / numbered list
+    numbered = _extract_numbered_or_bulleted(lines)
+    if len(numbered) >= 2:
+        return numbered
+
+    # 2) Indexed table rows (most common for PDF tables)
+    indexed = _extract_indexed_table_rows(lines)
+    if len(indexed) >= 3:
+        return indexed
+
+    # 3) Label/description pairs
+    pairs = _extract_label_desc_pairs(lines)
+    if len(pairs) >= 3:
+        return pairs
+
+    # 4) Subheadings inside the section
+    subs = _extract_subheadings(lines)
+    if len(subs) >= 3:
+        return subs
+
+    # No safe extraction: return empty to fall back to LLM.
+    return []
+
+
+def _render_deterministic_section_list(retrieval: RetrievalResult) -> Optional[str]:
+    """
+    If we can confidently extract items from the parent section chunk, render
+    them deterministically with citations (no LLM).
+    """
+    if retrieval.intent != "section_list" or not retrieval.evidences or not retrieval.coverage:
+        return None
+
+    target_sid = retrieval.coverage.section_id
+    parent_ev: Optional[Evidence] = None
+    for ev in retrieval.evidences:
+        if ev.kind == "parent" and ev.section_id == target_sid:
+            parent_ev = ev
+            break
+    if parent_ev is None:
+        # fallback: any parent
+        for ev in retrieval.evidences:
+            if ev.kind == "parent":
+                parent_ev = ev
+                break
+    if parent_ev is None:
+        return None
+
+    items = _extract_section_list_items(parent_ev.text)
+    if not items:
+        return None
+
+    # Only use deterministic rendering if it meets (or exceeds) the structural expected count.
+    expected = retrieval.coverage.expected_items if retrieval.coverage else None
+    if expected is not None and len(items) < expected:
+        return None
+
+    file_name = _extract_file_name_from_heading_path(parent_ev.heading_path)
+    if parent_ev.page_start and parent_ev.page_end and parent_ev.page_end != parent_ev.page_start:
+        cite = f"[{file_name} - Sayfa {parent_ev.page_start}-{parent_ev.page_end}]"
+    else:
+        cite = f"[{file_name} - Sayfa {parent_ev.page_start or 1}]"
+
+    # Render as numbered list; keep items as-is (extract-only; no translation).
+    lines_out: list[str] = []
+    for idx, it in enumerate(items, start=1):
+        t = (it or "").strip()
+        if not t:
+            continue
+        lines_out.append(f"{idx}. {t} {cite}")
+
+    return "\n".join(lines_out).strip() or None
+
+
 # ── Coverage post-validation ─────────────────────────────────────────────────
 
 def _count_answer_items(answer: str) -> int:
@@ -120,16 +342,44 @@ def generate_chat_answer(
     """
     Chat-only generation (no retrieval, no citations).
     """
-    client = genai.Client(api_key=gemini_api_key)
-    resp = client.models.generate_content(
-        model=gemini_model,
-        contents=f"SORU: {query}",
-        config=types.GenerateContentConfig(
-            system_instruction=_CHAT_SYSTEM_PROMPT,
-            temperature=0.4,
-            max_output_tokens=1024,
-        ),
-    )
+    def _retryable(e: Exception) -> bool:
+        msg = str(e)
+        return any(
+            s in msg
+            for s in (
+                "503",
+                "UNAVAILABLE",
+                "429",
+                "RESOURCE_EXHAUSTED",
+                "500",
+                "INTERNAL",
+                "timed out",
+                "Timeout",
+            )
+        )
+
+    last_err: Optional[Exception] = None
+    for attempt in range(1, 5):
+        try:
+            client = genai.Client(api_key=gemini_api_key)
+            resp = client.models.generate_content(
+                model=gemini_model,
+                contents=f"SORU: {query}",
+                config=types.GenerateContentConfig(
+                    system_instruction=_CHAT_SYSTEM_PROMPT,
+                    temperature=0.4,
+                    max_output_tokens=1024,
+                ),
+            )
+            return (resp.text or "").strip() or "Anlayamadım, tekrar eder misin?"
+        except Exception as e:
+            last_err = e
+            if attempt >= 4 or not _retryable(e):
+                raise
+            time.sleep(min(12.0, 1.5 * (2 ** (attempt - 1))))
+
+    # Should never reach here
+    raise last_err  # type: ignore[misc]
     return (resp.text or "").strip() or "Anlayamadım, tekrar eder misin?"
 
 
@@ -157,6 +407,26 @@ def generate_answer(
             context_preview="",
         )
 
+    # Deterministic path for section_list (prevents missing items / hallucination).
+    # Only triggers when we have coverage info (i.e., a parent section chunk).
+    deterministic = _render_deterministic_section_list(retrieval)
+    if deterministic:
+        citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", deterministic)) + len(
+            re.findall(r"\[[^\]]*?/\s*\d+\s*\]", deterministic)
+        )
+        expected = retrieval.coverage.expected_items if retrieval.coverage else None
+        actual = _count_answer_items(deterministic) if expected is not None else None
+        ok = (actual >= expected) if (expected is not None and actual is not None) else None
+        return GenerationResult(
+            answer=deterministic,
+            citations_found=citations_found,
+            coverage_expected=expected,
+            coverage_actual=actual,
+            coverage_ok=ok,
+            intent=retrieval.intent,
+            context_preview="",  # deterministic path doesn't need to expose context
+        )
+
     context = _build_context(retrieval.evidences)
 
     # Build system prompt
@@ -174,20 +444,45 @@ def generate_answer(
     )
 
     def _call(system_instruction: str, user_contents: str, temperature: float, max_tokens: int = 4096) -> str:
-        client = genai.Client(api_key=gemini_api_key)
-        response = client.models.generate_content(
-            model=gemini_model,
-            contents=user_contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-            ),
-        )
-        return response.text or ""
+        def _retryable(e: Exception) -> bool:
+            msg = str(e)
+            return any(
+                s in msg
+                for s in (
+                    "503",
+                    "UNAVAILABLE",
+                    "429",
+                    "RESOURCE_EXHAUSTED",
+                    "500",
+                    "INTERNAL",
+                    "timed out",
+                    "Timeout",
+                )
+            )
+
+        last_err: Optional[Exception] = None
+        for attempt in range(1, 5):
+            try:
+                client = genai.Client(api_key=gemini_api_key)
+                response = client.models.generate_content(
+                    model=gemini_model,
+                    contents=user_contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=temperature,
+                        max_output_tokens=max_tokens,
+                    ),
+                )
+                return response.text or ""
+            except Exception as e:
+                last_err = e
+                if attempt >= 4 or not _retryable(e):
+                    raise
+                time.sleep(min(12.0, 1.5 * (2 ** (attempt - 1))))
+
+        raise last_err  # type: ignore[misc]
 
     # Call Gemini
-    client = genai.Client(api_key=gemini_api_key)
     answer = _call(system, user_message, temperature=0.1) or "Belgede bu bilgi bulunamadı."
 
     # Count citations in the answer

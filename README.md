@@ -24,6 +24,7 @@ PDF/Image ─→ Ingestion ─→ Structure ─→ Chunking ─→ Indexing ─�
 | **Query Routing** | Liste/bolum soruları vs normal QA otomatik ayrimi |
 | **Complete Section Fetch** | Liste sorularinda tum bolum + alt bolumler getirilir |
 | **Coverage Check** | Beklenen madde sayisi vs cevaptaki madde sayisi kontrolu |
+| **Deterministic Section-List** | Uygun oldugunda liste sorulari LLM'e bagli kalmadan, parent section text'inden deterministik listelenir (eksik madde riski azalir) |
 | **Halusinasyon Onleme** | Strict system prompt, sadece baglamdaki bilgi |
 | **Citation** | Her bilgi cumlesine [DosyaAdi - Sayfa X] referansi |
 | **Coklu Belge + Izolasyon** | Tek session'da birden fazla belge; retrieval doc_id ile izole edilir (cross-doc contamination onlenir) |
@@ -77,6 +78,14 @@ Tarayicida `http://localhost:8000` adresini acin.
 - **Doc modu**: Belge sorularinda sadece belgelerden cevap verir; baglam yoksa “Belgede bu bilgi bulunamadı.” der.
 - **Chat modu**: Genel sohbet (belgeye dayali iddia uretmez).
 - Doc moddayken **kisa small-talk** (selam, tesekkur, “ben nasilim”, “aferin” vb.) otomatik sohbet cevabi alabilir.
+
+## Kabul Testi (Case Study)
+
+Case study dokumani icin katı kabul kriterlerini otomatik kontrol etmek icin:
+
+```bash
+python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
+```
 
 ## Proje Yapisi
 
