@@ -19,3 +19,6 @@ Thumbs.db
 
 # Chainlit uploaded assets (generated)
 .files/
+
+# Local credential manager diagnostics (generated, may include sensitive info)
+gcm-diagnose.log

@@ -181,7 +181,6 @@ python scripts/baseline_gate.py
 ├── GPU_REQUIREMENTS.md         # (Opsiyonel) GPU kurulum ve dogrulama
 ├── DEVLOG.md                   # Gelistirme sureci kaydi
 ├── TESTING.md                  # Test senaryolari ve sonuclari
-├── TESTLOG.md                  # Kosum/sonuc odakli kisa test gunlugu
 ├── src/
 │   ├── config.py               # Ortam degiskenleri yukleyici
 │   └── core/
