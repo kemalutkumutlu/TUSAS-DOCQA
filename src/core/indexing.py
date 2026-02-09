@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional
+
+from .embedding import Embedder
+from .hybrid import HybridResult, rrf_fuse
+from .models import Chunk
+from .sparse import BM25Index
+from .vectorstore import ChromaStore
+
+
+@dataclass
+class LocalIndex:
+    """
+    MVP index: Chroma (dense) + in-memory BM25 (sparse).
+
+    - Store all chunks in Chroma (parents + children)
+    - Build BM25 over child chunks only
+    """
+
+    embedder: Embedder
+    store: ChromaStore
+    bm25: BM25Index
+
+    @classmethod
+    def build(
+        cls,
+        chunks: List[Chunk],
+        chroma_dir: Path,
+        embedding_model: str,
+        collection_name: str = "chunks",
+    ) -> "LocalIndex":
+        embedder = Embedder(model_name=embedding_model)
+        store = ChromaStore(persist_dir=str(chroma_dir), collection_name=collection_name)
+
+        # Embed + upsert all chunks (parents + children)
+        embeddings = embedder.embed_texts([c.text for c in chunks])
+        store.upsert_chunks(chunks, embeddings=embeddings)
+
+        bm25 = BM25Index.build(chunks)
+        return cls(embedder=embedder, store=store, bm25=bm25)
+
+    def dense_search(self, query: str, top_k: int, where: Optional[dict] = None) -> List[str]:
+        qemb = self.embedder.embed_query(query)
+        res = self.store.query(qemb, top_k=top_k, where=where)
+        # Chroma returns list-of-lists
+        return list(res.get("ids", [[]])[0])
+
+    def sparse_search(self, query: str, top_k: int) -> List[str]:
+        return [cid for cid, _ in self.bm25.search(query, top_k=top_k)]
+
+    def hybrid_search(
+        self,
+        query: str,
+        dense_k: int = 10,
+        sparse_k: int = 10,
+        final_k: int = 10,
+    ) -> HybridResult:
+        dense_ids = self.dense_search(query, top_k=dense_k)
+        sparse_ids = self.sparse_search(query, top_k=sparse_k)
+        fused = rrf_fuse(dense_ids=dense_ids, sparse_ids=sparse_ids)
+        top = fused[:final_k]
+        ids = [cid for cid, _ in top]
+        return HybridResult(ids=ids, scores=dict(top))
+

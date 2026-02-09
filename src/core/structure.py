@@ -1,0 +1,339 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Iterable, Optional
+
+from .models import Chunk, IngestResult, PageText
+
+
+@dataclass(frozen=True)
+class Line:
+    page: int  # 1-based
+    text: str
+
+
+@dataclass(frozen=True)
+class Heading:
+    key: Optional[str]  # e.g. "2", "4.1", "A.4.1" (None if unkeyed)
+    title: str
+    level: int  # 1..N
+
+
+@dataclass
+class SectionNode:
+    section_id: str
+    title: str
+    level: int
+    heading_key: Optional[str]
+    heading_path: str
+    page_start: int
+    page_end: int
+    parent_id: Optional[str]
+    body_lines: list[Line] = field(default_factory=list)
+    children: list["SectionNode"] = field(default_factory=list)
+
+    def full_text(self) -> str:
+        body = "\n".join([ln.text for ln in self.body_lines]).strip()
+        if body:
+            return f"{self.title}\n{body}".strip()
+        return self.title.strip()
+
+
+_RE_NUM_DOT = re.compile(r"^(?P<num>\d+(?:\.\d+)*)\.\s+(?P<title>.+?)\s*$")
+_RE_NUM_DASH = re.compile(r"^(?P<num>\d+(?:\.\d+)*)\s*[-–—]\s*(?P<title>.+?)\s*$")
+_RE_ALPHA_NUM = re.compile(r"^(?P<alpha>[A-Z])\.(?P<num>\d+(?:\.\d+)*)\s+(?P<title>.+?)\s*$")
+
+
+def _heading_level_from_key(key: str) -> int:
+    # "2" -> 1, "4.1" -> 2, "A.4.1" -> 3
+    if re.match(r"^[A-Z]\.", key):
+        rest = key.split(".", 1)[1]
+        segs = [s for s in rest.split(".") if s]
+        return 1 + max(1, len(segs))
+    segs = [s for s in key.split(".") if s]
+    return max(1, len(segs))
+
+
+def detect_heading(line: str) -> Optional[Heading]:
+    """
+    Best-effort heading detection (document-agnostic).
+
+    We primarily rely on numbered headings:
+      - "2. Title"
+      - "4.1. Title"
+      - "4.1 - Title"
+      - "A.4.1 Title"
+
+    Non-numbered headings are intentionally NOT detected here yet, to avoid
+    false positives (e.g., repeating headers/footers).
+    """
+    s = line.strip()
+    if not s:
+        return None
+
+    m = _RE_ALPHA_NUM.match(s)
+    if m:
+        key = f"{m.group('alpha')}.{m.group('num')}"
+        level = _heading_level_from_key(key)
+        title = f"{key} {m.group('title').strip()}"
+        return Heading(key=key, title=title, level=level)
+
+    m = _RE_NUM_DOT.match(s)
+    if m:
+        key = m.group("num")
+        level = _heading_level_from_key(key)
+        title = f"{key}. {m.group('title').strip()}"
+        return Heading(key=key, title=title, level=level)
+
+    m = _RE_NUM_DASH.match(s)
+    if m:
+        key = m.group("num")
+        level = _heading_level_from_key(key)
+        title = f"{key} - {m.group('title').strip()}"
+        return Heading(key=key, title=title, level=level)
+
+    return None
+
+
+def _iter_page_lines(pages: Iterable[PageText]) -> list[Line]:
+    lines: list[Line] = []
+    for p in pages:
+        for raw in p.text.splitlines():
+            t = raw.strip()
+            # keep blanks as separators
+            lines.append(Line(page=p.page_number, text=t))
+    return lines
+
+
+def _detect_boilerplate(lines: list[Line], pages_count: int) -> set[str]:
+    """
+    Remove repeating headers/footers (document-agnostic heuristic).
+
+    Strategy: consider first/last few non-empty lines per page as candidates.
+    If a candidate repeats on many pages, treat it as boilerplate.
+    """
+    if pages_count <= 1:
+        return set()
+
+    per_page: dict[int, list[str]] = {}
+    for ln in lines:
+        if ln.text:
+            per_page.setdefault(ln.page, []).append(ln.text)
+
+    candidates: list[str] = []
+    for page, ls in per_page.items():
+        head = ls[:3]
+        tail = ls[-3:] if len(ls) > 3 else []
+        candidates.extend(head + tail)
+
+    freq: dict[str, int] = {}
+    for c in candidates:
+        if len(c) <= 90:
+            freq[c] = freq.get(c, 0) + 1
+
+    # "many pages": >50% of pages (rounded down) or at least 2
+    threshold = max(2, pages_count // 2 + 1)
+    return {s for s, n in freq.items() if n >= threshold}
+
+
+def build_section_tree(ingest: IngestResult) -> SectionNode:
+    """
+    Build a section tree from extracted page text using a deterministic stack.
+
+    - Root node ("root") spans the whole document.
+    - When a numbered heading is detected, create a new node at its level.
+    - Body lines are appended to the current node on stack top.
+    """
+    pages = ingest.pages
+    lines = _iter_page_lines(pages)
+    boilerplate = _detect_boilerplate(lines, pages_count=len(pages))
+
+    root = SectionNode(
+        section_id="root",
+        title=f"{ingest.file_name}",
+        level=0,
+        heading_key=None,
+        heading_path=f"{ingest.file_name}",
+        page_start=1 if pages else 1,
+        page_end=max([p.page_number for p in pages], default=1),
+        parent_id=None,
+    )
+
+    stack: list[SectionNode] = [root]
+    auto_id = 0
+
+    def new_unkeyed_id() -> str:
+        nonlocal auto_id
+        auto_id += 1
+        return f"h{auto_id:04d}"
+
+    for ln in lines:
+        if ln.text in boilerplate:
+            continue
+
+        h = detect_heading(ln.text)
+        if h is not None:
+            # Adjust stack for heading level
+            while len(stack) > 1 and stack[-1].level >= h.level:
+                stack.pop()
+
+            parent = stack[-1]
+            section_id = h.key or new_unkeyed_id()
+            heading_path = f"{parent.heading_path} / {h.title}".strip()
+            node = SectionNode(
+                section_id=section_id,
+                title=h.title,
+                level=h.level,
+                heading_key=h.key,
+                heading_path=heading_path,
+                page_start=ln.page,
+                page_end=ln.page,
+                parent_id=parent.section_id,
+            )
+            parent.children.append(node)
+            stack.append(node)
+            continue
+
+        # Body line
+        cur = stack[-1]
+        cur.body_lines.append(ln)
+        if ln.page < cur.page_start:
+            cur.page_start = ln.page
+        if ln.page > cur.page_end:
+            cur.page_end = ln.page
+
+    # Expand page_end upwards for parents
+    def fix_ranges(node: SectionNode) -> tuple[int, int]:
+        start, end = node.page_start, node.page_end
+        for ch in node.children:
+            cstart, cend = fix_ranges(ch)
+            start = min(start, cstart)
+            end = max(end, cend)
+        node.page_start, node.page_end = start, end
+        return start, end
+
+    fix_ranges(root)
+    return root
+
+
+def flatten_sections(root: SectionNode) -> list[SectionNode]:
+    out: list[SectionNode] = []
+
+    def walk(n: SectionNode) -> None:
+        out.append(n)
+        for c in n.children:
+            walk(c)
+
+    walk(root)
+    return out
+
+
+def _split_text_semantically(text: str, max_chars: int, overlap_chars: int) -> list[str]:
+    """
+    Simple, deterministic splitter:
+    - Split by blank lines into paragraphs
+    - Accumulate paragraphs into ~max_chars windows
+    - Add char-overlap between consecutive windows
+    """
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if not paras:
+        return []
+
+    chunks: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for p in paras:
+        add_len = len(p) + (2 if cur else 0)
+        if cur and cur_len + add_len > max_chars:
+            chunks.append("\n\n".join(cur).strip())
+            cur = []
+            cur_len = 0
+        cur.append(p)
+        cur_len += add_len
+    if cur:
+        chunks.append("\n\n".join(cur).strip())
+
+    if overlap_chars <= 0 or len(chunks) <= 1:
+        return chunks
+
+    overlapped: list[str] = []
+    prev_tail = ""
+    for i, ch in enumerate(chunks):
+        if i == 0:
+            overlapped.append(ch)
+        else:
+            prefix = prev_tail[-overlap_chars:]
+            merged = (prefix + "\n\n" + ch).strip() if prefix else ch
+            overlapped.append(merged)
+        prev_tail = ch
+    return overlapped
+
+
+def section_tree_to_chunks(
+    ingest: IngestResult,
+    root: SectionNode,
+    child_max_chars: int = 1800,
+    child_overlap_chars: int = 200,
+) -> list[Chunk]:
+    """
+    Create parent/child chunks per section node.
+
+    - Parent chunk: full section text (title + full body)
+    - Child chunks: split of full section text for retrieval granularity
+    """
+    chunks: list[Chunk] = []
+
+    def add_section(node: SectionNode) -> None:
+        if node.section_id == "root":
+            for ch in node.children:
+                add_section(ch)
+            return
+
+        parent_text = node.full_text()
+        parent_chunk_id = f"{ingest.doc_id}:{node.section_id}:parent"
+        chunks.append(
+            Chunk(
+                chunk_id=parent_chunk_id,
+                doc_id=ingest.doc_id,
+                file_name=ingest.file_name,
+                section_id=node.section_id,
+                parent_id=node.parent_id,
+                heading_path=node.heading_path,
+                page_start=node.page_start,
+                page_end=node.page_end,
+                text=parent_text,
+                kind="parent",
+            )
+        )
+
+        child_texts = _split_text_semantically(
+            parent_text,
+            max_chars=child_max_chars,
+            overlap_chars=child_overlap_chars,
+        )
+        if not child_texts:
+            child_texts = [parent_text]
+
+        for idx, ct in enumerate(child_texts):
+            chunks.append(
+                Chunk(
+                    chunk_id=f"{ingest.doc_id}:{node.section_id}:child:{idx:04d}",
+                    doc_id=ingest.doc_id,
+                    file_name=ingest.file_name,
+                    section_id=node.section_id,
+                    parent_id=node.section_id,  # children point to their parent section
+                    heading_path=node.heading_path,
+                    page_start=node.page_start,
+                    page_end=node.page_end,
+                    text=ct,
+                    kind="child",
+                )
+            )
+
+        for ch in node.children:
+            add_section(ch)
+
+    add_section(root)
+    return chunks
+

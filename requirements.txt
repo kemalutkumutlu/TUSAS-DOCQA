@@ -1,0 +1,21 @@
+# Core
+python-dotenv
+pydantic>=2
+
+# Parsing / PDF / images
+pymupdf
+pillow
+pytesseract
+
+# Retrieval
+chromadb
+sentence-transformers
+rank-bm25
+numpy
+
+# LLM
+google-genai
+
+# UI
+chainlit
+
