@@ -11,6 +11,8 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
 - `src/core/ingestion.py`: PDF + image okuma pipeline'i
 - PyMuPDF ile PDF text-layer cikarimi, text yetersizse pytesseract OCR fallback
 - Turkce+Ingilizce OCR (`tur+eng` lang)
+- (Opsiyonel) Gemini VLM ile **extract-only** cikarim (layout/tablolar icin)
+- **Dual-quality secim**: PDF/OCR/VLM adaylari arasinda baslik/structure korunumu daha iyi olani secilir (VLM force aciksa bile regresyon onlenir)
 - `scripts/extract_text.py` ile test edildi
 - **Sorun**: Windows konsolda UnicodeEncodeError → `sys.stdout.reconfigure(encoding="utf-8")` ile cozuldu
 - **Sorun**: `ModuleNotFoundError` script'lerden → `sys.path.insert` fallback eklendi
@@ -31,6 +33,10 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
 - `src/core/hybrid.py`: RRF (Reciprocal Rank Fusion) — dense + sparse sonuclarini birlestirme
 - `src/core/indexing.py`: `LocalIndex` sinifi — Chroma + BM25 tek catida
 - `scripts/build_index.py` ve `scripts/search_index.py` ile dogrulandir
+
+## Faz 3.1 — Coklu Belge Izolasyonu (Stale Delete + doc_id Filter)
+- Persisted Chroma kullaniminda eski chunk'larin karismasini onlemek icin doc_id bazli filtreleme ve stale temizleme eklendi
+- Aktif belge politikasi: birden fazla dokumanda varsayilan hedef son yuklenen belge; `/use <dosya>` ile secilebilir
 
 ## Faz 4 — Query Routing + Complete Section Fetch + Coverage
 - `src/core/retrieval.py`: Tam retrieval pipeline'i
@@ -58,6 +64,7 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
     4. Turkce cevap (kullanici Ingilizce sorarsa Ingilizce)
   - **Section-list modu**: LLM'e "beklenen madde sayisi" bildirilir
   - **Coverage post-validation**: LLM cevabindaki madde sayisi vs beklenen → uyari
+  - (Kalite) Citation/coverage eksikliginde 1 kez otomatik retry
   - **Context builder**: Parent chunk'lar tercih edilir, child duplicate onlenir
 - `src/core/pipeline.py`: Tum adimlari birlestiren `RAGPipeline` sinifi
   - `add_document()`: ingest → structure → chunk → index
@@ -73,6 +80,8 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
   - `on_message`: pipeline.ask() ile soru-cevap
   - Debug bilgisi: collapsible section (intent, citation sayisi, coverage durumu)
   - Hata kontrolu: `.env` eksikse uyari, belge yuklenmemisse uyari
+  - Modlar: `/chat` (sohbet), `/doc` (belge), `/use <dosya>` (aktif belge)
+  - Dogal dil komutlari: “sohbet moduna gec”, “belge moduna nasil donecem” gibi istekler otomatik algilanir
 - `chainlit.md`: Acilis ekrani metni
 
 ## Sonraki Adimlar

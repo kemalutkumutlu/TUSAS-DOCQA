@@ -20,6 +20,12 @@ Bu belge test senaryolarini, beklenen davranislari ve gozlemlenen sonuclari icer
 | Boilerplate temizleme | Tekrarlayan header/footer | Otomatik cikarilir | PASSED |
 | Parent-child chunk | Her section icin parent + children | Dogru olusturuldu | PASSED |
 
+### 1.3 Dual-Quality Ingestion (PDF/OCR/VLM)
+| Test | Senaryo | Beklenen | Sonuc |
+|------|---------|----------|-------|
+| VLM force regresyon | VLM mode=force acikken Case_Study_20260205.pdf | Headings korunur, chunk sayisi dusmez (18 civari) | PASSED |
+| Zayif text-layer | Text-layer kisa/bozuk sayfa | OCR veya VLM daha iyi ise secilir | BEKLIYOR |
+
 ---
 
 ## 2. Retrieval Testleri
@@ -29,6 +35,12 @@ Bu belge test senaryolarini, beklenen davranislari ve gozlemlenen sonuclari icer
 |------|-------|----------|-------|
 | Dense + sparse | "fonksiyonel gereksinimler" | Section 2 ust siralarda | PASSED |
 | BM25 keyword | "DEVLOG.md" | Section 4.1 bulunur | PASSED |
+
+### 2.1.1 Coklu Belge Izolasyonu
+| Test | Senaryo | Beklenen | Sonuc |
+|------|---------|----------|-------|
+| Cross-doc contamination | 2+ PDF yüklü iken retrieval | Sonuclar sadece hedef doc_id'den gelir | PASSED (smoke_suite) |
+| Aktif belge secimi | `/use <dosya>` sonra sorgu | Retrieval o belgeye filtrelenir | BEKLIYOR (UI) |
 
 ### 2.2 Query Routing (Faz 4)
 | Test | Sorgu | Beklenen Intent | Sonuc |
@@ -80,7 +92,10 @@ Bu belge test senaryolarini, beklenen davranislari ve gozlemlenen sonuclari icer
 | Coklu dosya | 2+ dosya yukleme | Hepsi indekslenir | BEKLIYOR |
 | Debug paneli | Soru soruldugunda | Intent, citation, coverage gosterilir | BEKLIYOR |
 | Hata durumu | API key eksik | Uyari mesaji | BEKLIYOR |
-| Bos sorgu | Belge yuklemeden soru | "Henuz belge yuklenmedi" | BEKLIYOR |
+| Uygulama baslangici | Uygulama acilir acilmaz | Upload zorunlu degil; mesaj yazilabilir | PASSED |
+| Bos belge (doc modu) | Belge yuklemeden belge sorusu | "Henuz belge yuklenmedi..." | BEKLIYOR |
+| Dogal dil mod degisimi | "sohbet moduna gec" | Chat moda gecip yanitlar | BEKLIYOR |
+| Dogal dil mod degisimi | "belge moduna nasil donecem" | Doc moda gecip yonlendirir | BEKLIYOR |
 
 ---
 

@@ -18,3 +18,8 @@ PDF ve gorsel (JPG, PNG) belgelerinizi yukleyin, ardindan Turkce veya Ingilizce 
   - `/chat`: Belge olmadan sohbet
   - `/doc`: Belge modu (belge sorulari)
   - `/use <dosya>`: Aktif belge sec
+
+## Notlar
+
+- Doc modda belge yoksa, belge sorulari icin once belge yuklemeniz istenir.
+- Birden fazla belge yuklediyseniz, soru hedefini netlestirmek icin `/use <dosya>` kullanin.

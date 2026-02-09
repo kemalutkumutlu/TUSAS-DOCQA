@@ -17,7 +17,8 @@ PDF/Image ─→ Ingestion ─→ Structure ─→ Chunking ─→ Indexing ─�
 | Ozellik | Aciklama |
 |---------|----------|
 | **Belge Yukleme** | PDF, JPG, PNG destegi |
-| **Metin Cikarimi** | PDF text-layer + Tesseract OCR fallback (TR+EN) |
+| **Metin Cikarimi** | PDF text-layer + Tesseract OCR + (opsiyonel) Gemini VLM extract-only |
+| **Dual-Quality Secim** | Aynı sayfada birden fazla cikarim adayi varsa (PDF/OCR/VLM), baslik/structure korunumu daha iyi olani secilir |
 | **Hiyerarsik Chunking** | Bolum algılama, parent-child chunk'lar, heading metadata |
 | **Hibrit Arama** | Dense (vector) + Sparse (BM25) + RRF fusion |
 | **Query Routing** | Liste/bolum soruları vs normal QA otomatik ayrimi |
@@ -25,7 +26,8 @@ PDF/Image ─→ Ingestion ─→ Structure ─→ Chunking ─→ Indexing ─�
 | **Coverage Check** | Beklenen madde sayisi vs cevaptaki madde sayisi kontrolu |
 | **Halusinasyon Onleme** | Strict system prompt, sadece baglamdaki bilgi |
 | **Citation** | Her bilgi cumlesine [DosyaAdi - Sayfa X] referansi |
-| **Coklu Belge** | Tek session'da birden fazla belge yuklenebilir |
+| **Coklu Belge + Izolasyon** | Tek session'da birden fazla belge; retrieval doc_id ile izole edilir (cross-doc contamination onlenir) |
+| **Aktif Belge** | Birden fazla belge yuklendiginde `/use <dosya>` ile hedef belge secilir (varsayilan: son yuklenen) |
 
 ## Kurulum (Windows)
 
@@ -41,6 +43,9 @@ pip install -r requirements.txt
 
 [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) yukleyin.
 PATH'de degilse `.env`'de `TESSERACT_CMD` ayarlayin.
+
+**Not (Windows izinleri):** Turkce dil paketi (tur.traineddata) icin Program Files'a yazamiyorsaniz,
+`.env` icinde `TESSDATA_PREFIX` ile kullanici-yazilabilir bir klasor belirtebilirsiniz.
 
 ### 3) API Anahtari
 
@@ -66,6 +71,12 @@ Tarayicida `http://localhost:8000` adresini acin.
 - Belge olmadan sohbet icin: `/chat`
 - Belge sorulari icin: `/doc`
 - Birden fazla belge varsa aktif belge secmek icin: `/use <dosya>`
+
+### Mod Davranisi (Kisa)
+
+- **Doc modu**: Belge sorularinda sadece belgelerden cevap verir; baglam yoksa “Belgede bu bilgi bulunamadı.” der.
+- **Chat modu**: Genel sohbet (belgeye dayali iddia uretmez).
+- Doc moddayken **kisa small-talk** (selam, tesekkur, “ben nasilim”, “aferin” vb.) otomatik sohbet cevabi alabilir.
 
 ## Proje Yapisi
 
