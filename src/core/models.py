@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 
-TextSource = Literal["pdf_text", "ocr", "image_ocr"]
+TextSource = Literal["pdf_text", "ocr", "image_ocr", "vlm"]
 
 
 @dataclass(frozen=True)

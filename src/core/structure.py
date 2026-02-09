@@ -89,8 +89,13 @@ def detect_heading(line: str) -> Optional[Heading]:
     m = _RE_NUM_DASH.match(s)
     if m:
         key = m.group("num")
+        title_raw = m.group("title").strip()
+        # Doc-agnostic guardrails against date/range false-positives.
+        # - Reject headings where the "title" starts with a digit (often date ranges like "03-04-1987")
+        if title_raw[:1].isdigit():
+            return None
         level = _heading_level_from_key(key)
-        title = f"{key} - {m.group('title').strip()}"
+        title = f"{key} - {title_raw}"
         return Heading(key=key, title=title, level=level)
 
     return None
@@ -149,6 +154,48 @@ def build_section_tree(ingest: IngestResult) -> SectionNode:
     lines = _iter_page_lines(pages)
     boilerplate = _detect_boilerplate(lines, pages_count=len(pages))
 
+    def _is_allcaps_heading(s: str) -> bool:
+        """
+        Conservative, document-agnostic fallback for heading detection.
+
+        Only used when numbered heading detection yields too few headings.
+        Intuition: many documents use ALLCAPS section labels (e.g., "INTRODUCTION"),
+        which deterministic numbered regexes won't catch.
+        """
+        t = s.strip()
+        if not t:
+            return False
+        if any(ch.isdigit() for ch in t):
+            return False
+        if len(t) < 3 or len(t) > 40:
+            return False
+        if t.endswith((".", "!", "?", ":", ";")):
+            return False
+        # Token count: avoid treating long sentences as headings
+        toks = [x for x in re.split(r"\s+", t) if x]
+        if len(toks) > 6:
+            return False
+        letters = [ch for ch in t if ch.isalpha()]
+        if len(letters) < 3:
+            return False
+        upper = sum(1 for ch in letters if ch.isupper())
+        # Require strong uppercase ratio, but not necessarily perfect (Turkish casing etc.)
+        return (upper / max(1, len(letters))) >= 0.85
+
+    # Decide whether to enable ALLCAPS heading fallback.
+    numbered_headings = 0
+    allcaps_candidates = 0
+    for ln in lines:
+        if ln.text in boilerplate:
+            continue
+        if not ln.text:
+            continue
+        if detect_heading(ln.text) is not None:
+            numbered_headings += 1
+        if _is_allcaps_heading(ln.text):
+            allcaps_candidates += 1
+    enable_allcaps = numbered_headings < 2 and allcaps_candidates >= 2
+
     root = SectionNode(
         section_id="root",
         title=f"{ingest.file_name}",
@@ -173,6 +220,8 @@ def build_section_tree(ingest: IngestResult) -> SectionNode:
             continue
 
         h = detect_heading(ln.text)
+        if h is None and enable_allcaps and _is_allcaps_heading(ln.text):
+            h = Heading(key=None, title=ln.text.strip(), level=1)
         if h is not None:
             # Adjust stack for heading level
             while len(stack) > 1 and stack[-1].level >= h.level:

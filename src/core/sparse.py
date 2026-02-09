@@ -13,7 +13,22 @@ def simple_tokenize(text: str) -> List[str]:
     # TR/EN friendly-ish tokenizer (deterministic, dependency-free)
     text = text.lower()
     text = re.sub(r"[^0-9a-zçğıöşüâîû\-]+", " ", text)
-    return [t for t in text.split() if t]
+    tokens = [t for t in text.split() if t]
+
+    # Language-agnostic robustness:
+    # add character 3-grams to improve matching for suffixes/typos (e.g., "adres" vs "adresini")
+    ngrams: list[str] = []
+    for tok in tokens:
+        # avoid exploding token count on very long strings (IDs/addresses)
+        if len(tok) < 5 or len(tok) > 24:
+            continue
+        # generate up to 12 trigrams per token
+        limit = min(len(tok) - 2, 12)
+        for i in range(limit):
+            ng = tok[i : i + 3]
+            ngrams.append(f"~{ng}")
+
+    return tokens + ngrams
 
 
 @dataclass

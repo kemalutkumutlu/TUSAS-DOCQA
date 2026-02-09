@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 from .generation import GenerationResult, generate_answer
 from .indexing import LocalIndex
 from .ingestion import OCRConfig, ingest_any, IngestResult
+from .vlm_extract import VLMConfig
 from .models import Chunk
 from .retrieval import RetrievalResult, retrieve
 from .structure import build_section_tree, section_tree_to_chunks
@@ -41,6 +42,7 @@ class RAGPipeline:
     gemini_api_key: str
     gemini_model: str
     ocr_config: OCRConfig
+    vlm_config: Optional[VLMConfig] = None
 
     # State
     _documents: Dict[str, DocumentState] = field(default_factory=dict)
@@ -52,7 +54,12 @@ class RAGPipeline:
         Ingest a document, build structure, create chunks, and rebuild index.
         Returns the document state.
         """
-        ingest = ingest_any(file_path, ocr=self.ocr_config, display_name=display_name)
+        ingest = ingest_any(
+            file_path,
+            ocr=self.ocr_config,
+            display_name=display_name,
+            vlm=self.vlm_config,
+        )
         root = build_section_tree(ingest)
         chunks = section_tree_to_chunks(ingest, root)
 

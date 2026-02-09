@@ -66,3 +66,13 @@ class ChromaStore:
         col = self._get_collection()
         return col.get(ids=ids, include=["documents", "metadatas"])
 
+    def delete_where(self, where: Dict[str, Any]) -> None:
+        """
+        Delete records matching a metadata filter.
+
+        This is used to prevent stale chunks for the same doc_id from accumulating
+        across rebuilds (and to avoid cross-document contamination in persistent stores).
+        """
+        col = self._get_collection()
+        col.delete(where=where)
+

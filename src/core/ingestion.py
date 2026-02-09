@@ -9,6 +9,7 @@ from PIL import Image
 
 from .models import IngestResult, PageText
 from .utils import normalize_whitespace, sha256_file
+from .vlm_extract import VLMConfig, extract_text_from_image
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,23 @@ class OCRConfig:
     enabled: bool = True
     lang: str = "tur+eng"
     tesseract_cmd: Optional[str] = None
+
+
+def _text_quality_low(text: str) -> bool:
+    """
+    Document-agnostic heuristic to decide whether extracted text is low quality.
+    """
+    t = text.strip()
+    if len(t) < 120:
+        return True
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    if not lines:
+        return True
+    # Many single-token lines can indicate broken layout extraction.
+    single_token_lines = sum(1 for ln in lines if len(ln.split()) <= 1 and len(ln) < 40)
+    if single_token_lines / max(1, len(lines)) > 0.55:
+        return True
+    return False
 
 
 def _configure_tesseract(tesseract_cmd: Optional[str]) -> None:
@@ -30,7 +48,12 @@ def _configure_tesseract(tesseract_cmd: Optional[str]) -> None:
         return
 
 
-def ingest_pdf(path: Path, ocr: OCRConfig, display_name: Optional[str] = None) -> IngestResult:
+def ingest_pdf(
+    path: Path,
+    ocr: OCRConfig,
+    display_name: Optional[str] = None,
+    vlm: Optional[VLMConfig] = None,
+) -> IngestResult:
     """
     Extract page-bounded text from a PDF.
 
@@ -51,6 +74,7 @@ def ingest_pdf(path: Path, ocr: OCRConfig, display_name: Optional[str] = None) -
 
     pdf = fitz.open(str(path))
     try:
+        vlm_pages_used = 0
         for i in range(pdf.page_count):
             page = pdf.load_page(i)
             page_no = i + 1
@@ -78,6 +102,22 @@ def ingest_pdf(path: Path, ocr: OCRConfig, display_name: Optional[str] = None) -
             else:
                 source = "pdf_text"
 
+            # VLM fallback (extract-only) for low-quality pages.
+            if vlm and vlm.mode != "off" and vlm_pages_used < vlm.max_pages:
+                try:
+                    should_vlm = vlm.mode == "force" or (vlm.mode == "auto" and _text_quality_low(text_norm))
+                    if should_vlm:
+                        pix = page.get_pixmap(dpi=200)
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        vlm_text = extract_text_from_image(img, cfg=vlm)
+                        vlm_text_norm = normalize_whitespace(vlm_text)
+                        if len(vlm_text_norm) > len(text_norm):
+                            text_norm = vlm_text_norm
+                            source = "vlm"
+                        vlm_pages_used += 1
+                except Exception as e:  # noqa: BLE001
+                    warnings.append(f"VLM failed on page {page_no}: {e}")
+
             pages.append(
                 PageText(
                     doc_id=doc_id,
@@ -93,7 +133,12 @@ def ingest_pdf(path: Path, ocr: OCRConfig, display_name: Optional[str] = None) -
     return IngestResult(doc_id=doc_id, file_name=file_name, pages=pages, warnings=warnings)
 
 
-def ingest_image(path: Path, ocr: OCRConfig, display_name: Optional[str] = None) -> IngestResult:
+def ingest_image(
+    path: Path,
+    ocr: OCRConfig,
+    display_name: Optional[str] = None,
+    vlm: Optional[VLMConfig] = None,
+) -> IngestResult:
     """OCR a single image file into one 'page'."""
     if not path.exists():
         raise FileNotFoundError(str(path))
@@ -105,17 +150,29 @@ def ingest_image(path: Path, ocr: OCRConfig, display_name: Optional[str] = None)
     warnings: list[str] = []
 
     text_norm = ""
-    if ocr.enabled:
+    if vlm and vlm.mode in ("force", "auto") and vlm.api_key:
+        try:
+            img = Image.open(path).convert("RGB")
+            vlm_text = extract_text_from_image(img, cfg=vlm)
+            text_norm = normalize_whitespace(vlm_text)
+            source = "vlm"
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"VLM image extract failed: {e}")
+            source = "image_ocr"
+    elif ocr.enabled:
         try:
             import pytesseract  # noqa: WPS433
 
             img = Image.open(path).convert("RGB")
             ocr_text = pytesseract.image_to_string(img, lang=ocr.lang) or ""
             text_norm = normalize_whitespace(ocr_text)
+            source = "image_ocr"
         except Exception as e:  # noqa: BLE001
             warnings.append(f"Image OCR failed: {e}")
+            source = "image_ocr"
     else:
         warnings.append("OCR disabled; image ingestion produced empty text.")
+        source = "image_ocr"
 
     pages = [
         PageText(
@@ -123,17 +180,22 @@ def ingest_image(path: Path, ocr: OCRConfig, display_name: Optional[str] = None)
             file_name=file_name,
             page_number=1,
             text=text_norm,
-            source="image_ocr",
+            source=source,  # type: ignore[arg-type]
         )
     ]
     return IngestResult(doc_id=doc_id, file_name=file_name, pages=pages, warnings=warnings)
 
 
-def ingest_any(path: Path, ocr: OCRConfig, display_name: Optional[str] = None) -> IngestResult:
+def ingest_any(
+    path: Path,
+    ocr: OCRConfig,
+    display_name: Optional[str] = None,
+    vlm: Optional[VLMConfig] = None,
+) -> IngestResult:
     suffix = path.suffix.lower()
     if suffix == ".pdf":
-        return ingest_pdf(path, ocr=ocr, display_name=display_name)
+        return ingest_pdf(path, ocr=ocr, display_name=display_name, vlm=vlm)
     if suffix in (".png", ".jpg", ".jpeg"):
-        return ingest_image(path, ocr=ocr, display_name=display_name)
+        return ingest_image(path, ocr=ocr, display_name=display_name, vlm=vlm)
     raise ValueError(f"Unsupported file type: {suffix}")
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from .embedding import Embedder
 from .hybrid import HybridResult, rrf_fuse
@@ -23,6 +23,7 @@ class LocalIndex:
     embedder: Embedder
     store: ChromaStore
     bm25: BM25Index
+    allowed_doc_ids: Set[str]
 
     @classmethod
     def build(
@@ -35,16 +36,39 @@ class LocalIndex:
         embedder = Embedder(model_name=embedding_model)
         store = ChromaStore(persist_dir=str(chroma_dir), collection_name=collection_name)
 
+        # Prevent stale chunks accumulating for the same doc_id(s) in the persistent store.
+        doc_ids = sorted({c.doc_id for c in chunks})
+        if doc_ids:
+            if len(doc_ids) == 1:
+                store.delete_where(where={"doc_id": doc_ids[0]})
+            else:
+                store.delete_where(where={"$or": [{"doc_id": did} for did in doc_ids]})
+
         # Embed + upsert all chunks (parents + children)
         embeddings = embedder.embed_texts([c.text for c in chunks])
         store.upsert_chunks(chunks, embeddings=embeddings)
 
         bm25 = BM25Index.build(chunks)
-        return cls(embedder=embedder, store=store, bm25=bm25)
+        allowed_doc_ids = {c.doc_id for c in chunks}
+        return cls(embedder=embedder, store=store, bm25=bm25, allowed_doc_ids=allowed_doc_ids)
+
+    def _where_allowed_docs(self) -> Optional[dict]:
+        """
+        Build a Chroma `where` filter to avoid cross-document contamination.
+        We never rely on clearing the persistent store; instead we restrict queries
+        to doc_ids that were used to build this index instance.
+        """
+        if not self.allowed_doc_ids:
+            return None
+        if len(self.allowed_doc_ids) == 1:
+            return {"doc_id": next(iter(self.allowed_doc_ids))}
+        return {"$or": [{"doc_id": did} for did in sorted(self.allowed_doc_ids)]}
 
     def dense_search(self, query: str, top_k: int, where: Optional[dict] = None) -> List[str]:
         qemb = self.embedder.embed_query(query)
-        res = self.store.query(qemb, top_k=top_k, where=where)
+        # Always restrict dense search to the documents in this index (unless caller supplies where)
+        where_final = where or self._where_allowed_docs()
+        res = self.store.query(qemb, top_k=top_k, where=where_final)
         # Chroma returns list-of-lists
         return list(res.get("ids", [[]])[0])
 

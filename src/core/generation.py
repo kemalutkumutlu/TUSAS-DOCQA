@@ -143,22 +143,40 @@ def generate_answer(
         f"SORU: {query}"
     )
 
+    def _call(system_instruction: str, user_contents: str, temperature: float) -> str:
+        client = genai.Client(api_key=gemini_api_key)
+        response = client.models.generate_content(
+            model=gemini_model,
+            contents=user_contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=temperature,
+                max_output_tokens=4096,
+            ),
+        )
+        return response.text or ""
+
     # Call Gemini
     client = genai.Client(api_key=gemini_api_key)
-    response = client.models.generate_content(
-        model=gemini_model,
-        contents=user_message,
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            temperature=0.1,  # Low temp for factual accuracy
-            max_output_tokens=4096,
-        ),
-    )
-
-    answer = response.text or "Belgede bu bilgi bulunamadı."
+    answer = _call(system, user_message, temperature=0.1) or "Belgede bu bilgi bulunamadı."
 
     # Count citations in the answer
     citations_found = len(re.findall(r"\[.+?-\s*Sayfa\s*\d+", answer))
+
+    # If citations are missing, do one strict retry to enforce formatting.
+    if citations_found == 0 and retrieval.evidences and answer.strip() != "Belgede bu bilgi bulunamadı.":
+        system_retry = (
+            system
+            + "\n\nFORMAT DÜZELTME MODU:\n"
+            + "- Sadece cevabı yeniden yaz.\n"
+            + "- Her cümle/madde sonunda mutlaka [DosyaAdı - Sayfa X] kaynak formatı olsun.\n"
+            + "- Kaynaksız hiçbir cümle yazma.\n"
+            + "- İçerik ekleme/çıkarma yapma; sadece formatı düzelt.\n"
+        )
+        answer_retry = _call(system_retry, user_message, temperature=0.0).strip()
+        if answer_retry:
+            answer = answer_retry
+            citations_found = len(re.findall(r"\[.+?-\s*Sayfa\s*\d+", answer))
 
     # Coverage post-check
     coverage_actual: Optional[int] = None

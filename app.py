@@ -15,6 +15,7 @@ import chainlit as cl
 from src.config import load_settings
 from src.core.ingestion import OCRConfig
 from src.core.pipeline import RAGPipeline
+from src.core.vlm_extract import VLMConfig
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -43,6 +44,11 @@ def _get_pipeline() -> RAGPipeline:
                 enabled=True,
                 lang="tur+eng",
                 tesseract_cmd=settings.tesseract_cmd,
+            ),
+            vlm_config=VLMConfig(
+                api_key=settings.gemini_api_key,
+                model=settings.gemini_model,
+                mode="auto",
             ),
         )
         cl.user_session.set("pipeline", pipeline)

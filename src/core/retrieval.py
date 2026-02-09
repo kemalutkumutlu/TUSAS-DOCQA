@@ -110,7 +110,7 @@ def _pick_best_section(
     got_metas: List[dict],
     hybrid_scores: Dict[str, float],
     query: str,
-) -> Optional[str]:
+) -> Optional[tuple[str, str]]:
     """
     From the hybrid search results, pick the best section_id.
     Strategy: combine hybrid score with heading-overlap bonus.
@@ -118,30 +118,45 @@ def _pick_best_section(
     because it ranks slightly higher in the embedding space.
     """
     # Collect unique section candidates
-    candidates: Dict[str, Tuple[float, float]] = {}  # section_id -> (best_hybrid_score, heading_overlap)
+    # (doc_id, section_id) -> (best_hybrid_score, heading_overlap)
+    candidates: Dict[tuple[str, str], Tuple[float, float]] = {}
     for cid, meta in zip(got_ids, got_metas):
+        did = meta.get("doc_id", "")
         sid = meta.get("section_id", "")
-        if not sid or sid == "root":
+        if not did or not sid or sid == "root":
             continue
         hp = meta.get("heading_path", "")
         hs = hybrid_scores.get(cid, 0.0)
         ho = _heading_query_overlap(hp, query)
-        if sid not in candidates or hs > candidates[sid][0]:
-            candidates[sid] = (hs, ho)
+        key = (did, sid)
+        if key not in candidates or hs > candidates[key][0]:
+            candidates[key] = (hs, ho)
 
     if not candidates:
-        return None
+        # Fallback: some documents have no detected headings; allow selecting root.
+        for cid, meta in zip(got_ids, got_metas):
+            did = meta.get("doc_id", "")
+            sid = meta.get("section_id", "")
+            if not did or sid != "root":
+                continue
+            hp = meta.get("heading_path", "")
+            hs = hybrid_scores.get(cid, 0.0)
+            ho = _heading_query_overlap(hp, query)
+            candidates[(did, sid)] = (hs, ho)
+
+        if not candidates:
+            return None
 
     # Score = hybrid_score + 0.5 * heading_overlap
     # The 0.5 bonus is enough to nudge a heading-matching section to the top
     # when hybrid scores are close, but won't override a vastly better match.
-    best_sid = max(candidates, key=lambda sid: candidates[sid][0] + 0.5 * candidates[sid][1])
-    return best_sid
+    best_key = max(candidates, key=lambda k: candidates[k][0] + 0.5 * candidates[k][1])
+    return best_key
 
 
 # ── Section + subtree fetch ──────────────────────────────────────────────────
 
-def _fetch_section_and_subtree(index: LocalIndex, section_id: str) -> List[Evidence]:
+def _fetch_section_and_subtree(index: LocalIndex, doc_id: str, section_id: str) -> List[Evidence]:
     """
     Fetch the section's own chunks (parent + children) AND all chunks whose
     parent_id equals this section_id (the subtree).  This ensures that asking
@@ -151,13 +166,13 @@ def _fetch_section_and_subtree(index: LocalIndex, section_id: str) -> List[Evide
 
     # 1) Chunks belonging directly to this section
     own = col.get(
-        where={"section_id": section_id},
+        where={"$and": [{"doc_id": doc_id}, {"section_id": section_id}]},
         include=["documents", "metadatas"],
     )
 
     # 2) Chunks whose parent_id is this section (sub-sections)
     children_of = col.get(
-        where={"parent_id": section_id},
+        where={"$and": [{"doc_id": doc_id}, {"parent_id": section_id}]},
         include=["documents", "metadatas"],
     )
 
@@ -172,7 +187,7 @@ def _fetch_section_and_subtree(index: LocalIndex, section_id: str) -> List[Evide
     grandchildren_results = []
     for sub_sid in sub_section_ids:
         gc = col.get(
-            where={"parent_id": sub_sid},
+            where={"$and": [{"doc_id": doc_id}, {"parent_id": sub_sid}]},
             include=["documents", "metadatas"],
         )
         grandchildren_results.append(gc)
@@ -345,13 +360,14 @@ def retrieve(
     got_metas = got.get("metadatas", [])
 
     if intent == "section_list":
-        best_section_id = _pick_best_section(
+        best = _pick_best_section(
             got_ids, got_metas, hybrid.scores, query,
         )
 
-        if best_section_id:
+        if best:
+            best_doc_id, best_section_id = best
             # Complete section + subtree fetch
-            section_evidences = _fetch_section_and_subtree(index, best_section_id)
+            section_evidences = _fetch_section_and_subtree(index, best_doc_id, best_section_id)
 
             # Coverage info from the parent chunk text
             coverage = None
