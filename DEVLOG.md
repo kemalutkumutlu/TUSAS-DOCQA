@@ -72,6 +72,26 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
   - Multi-document desteqi (session icinde birden fazla belge)
 - `google-genai` SDK eklendi requirements.txt'ye
 
+## Faz 5.1 — Deterministic Section-List + Dayaniklilik (100/100 hedefi)
+- **Amaç**: Liste/bölüm çıkarma sorularında eksik madde problemini düşürmek, halüsinasyonu azaltmak ve geçici Gemini API hatalarına dayanıklılık kazanmak.
+- `src/core/generation.py`:
+  - **Deterministic section_list rendering (doc-agnostic)**:
+    - `section_list` intent'te uygun olduğunda LLM'e gitmeden, ilgili **parent section** metninden madde çıkarımı yapar.
+    - Çıkarım türleri: numaralı/bullet listeler, indeksli tablo satırları, label/description çiftleri, alt başlıklar.
+  - **Güvenlik kilidi (regresyon önleme)**:
+    - Deterministic çıkarım sadece “yüksek güven” sinyali olduğunda devreye girer; aksi halde LLM yoluna **fallback** eder.
+    - `coverage.expected_items` varsa ve `len(items) < expected` ise deterministic sonuç iptal edilir (eksik liste riski).
+    - Önceki “her satırı listele” tarzı gürültülü fallback kaldırıldı (yanlış/çöp madde üretimini azaltır).
+  - **Tablo satırı toparlama**:
+    - `Label: açıklama` şeklindeki tablolarda açıklama birden fazla satıra bölünmüşse, sonraki label başlayana kadar satırlar birleştirilir (eksik içerik düşer).
+    - Olası tablo header çiftleri (örn. `ColumnA: ColumnB`) yapısal olarak elenir (içerik/kelimeye özel kural yok).
+  - **Gemini retry + backoff**:
+    - `503/UNAVAILABLE`, `429/RESOURCE_EXHAUSTED`, timeout gibi geçici hatalarda otomatik tekrar deneme + artan bekleme eklendi.
+    - Başarılı çağrılarda davranış değişmez; sadece geçici hata durumunda stabilite artar.
+- `scripts/eval_case_study.py`:
+  - Case Study için **katı kabul kapısı** (eval script'i dokümana özeldir; ürün mantığı doküman-agnostic kalır).
+  - `section_list` ve `normal_qa` için intent/citation/eksik madde kontrolleri yapar; geçmezse exit code=1.
+
 ## Faz 6 — Chainlit UI
 - `app.py` tam pipeline'a baglandi:
   - `on_chat_start`: uygulama acilir acilmaz mesaj yazilabilir (upload modal zorunlu degil)
@@ -85,6 +105,5 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
 - `chainlit.md`: Acilis ekrani metni
 
 ## Sonraki Adimlar
-- Uçtan uca test (Gemini API key ile)
-- TESTING.md guncelleme (gercek sonuclarla)
+- Uçtan uca testleri farkli PDF tipleriyle genislet (tarama PDF, tablo agirlikli, cok kolonlu)
 - Demo video
