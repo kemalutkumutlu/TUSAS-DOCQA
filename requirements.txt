@@ -1,21 +1,21 @@
 # Core
-python-dotenv
-pydantic>=2
+python-dotenv==1.2.1
+pydantic==2.12.5
 
 # Parsing / PDF / images
-pymupdf
-pillow
-pytesseract
+pymupdf==1.26.7
+pillow==12.1.0
+pytesseract==0.3.13
 
 # Retrieval
-chromadb
-sentence-transformers
-rank-bm25
-numpy
+chromadb==1.5.0
+sentence-transformers==5.2.2
+rank-bm25==0.2.2
+numpy==2.2.6
 
 # LLM
-google-genai
+google-genai==1.62.0
 
 # UI
-chainlit
+chainlit==2.9.6
 

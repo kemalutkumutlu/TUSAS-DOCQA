@@ -4,6 +4,29 @@ Bu belge test senaryolarini, beklenen davranislari ve gozlemlenen sonuclari icer
 
 ---
 
+## 0. Otomatik Kapilar (onerilen)
+
+Bu proje MVP oldugu icin otomatik kapilar, “calisan seyi bozmadan” gelistirmenin temelidir.
+
+### 0.1 LLM gerektirmeyen baseline (sentetik PDF)
+
+```bash
+python scripts/baseline_gate.py
+```
+
+Bu komut:
+- `compileall` ile syntax/import kontrolu yapar
+- Sentetik PDF’ler uzerinde ingestion → structure → indexing → retrieval akisini dogrular
+- `section_list` subtree fetch ve coklu-belge izolasyonunu kontrol eder
+
+### 0.2 Case Study kabul kapisi (Gemini gerekir)
+
+```bash
+python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
+```
+
+---
+
 ## 1. Yapisal Algilama Testleri
 
 ### 1.1 Heading Detection (Faz 2)
@@ -40,7 +63,7 @@ Bu belge test senaryolarini, beklenen davranislari ve gozlemlenen sonuclari icer
 | Test | Senaryo | Beklenen | Sonuc |
 |------|---------|----------|-------|
 | Cross-doc contamination | 2+ PDF yüklü iken retrieval | Sonuclar sadece hedef doc_id'den gelir | PASSED (smoke_suite) |
-| Aktif belge secimi | `/use <dosya>` sonra sorgu | Retrieval o belgeye filtrelenir | BEKLIYOR (UI) |
+| Aktif belge secimi | `/use <dosya>` sonra sorgu | Retrieval o belgeye filtrelenir | PASSED (core: baseline_gate) / BEKLIYOR (UI) |
 
 ### 2.2 Query Routing (Faz 4)
 | Test | Sorgu | Beklenen Intent | Sonuc |
@@ -96,6 +119,13 @@ Bu belge test senaryolarini, beklenen davranislari ve gozlemlenen sonuclari icer
 | Bos belge (doc modu) | Belge yuklemeden belge sorusu | "Henuz belge yuklenmedi..." | BEKLIYOR |
 | Dogal dil mod degisimi | "sohbet moduna gec" | Chat moda gecip yanitlar | BEKLIYOR |
 | Dogal dil mod degisimi | "belge moduna nasil donecem" | Doc moda gecip yonlendirir | BEKLIYOR |
+
+### 4.1 Dev UX (Windows)
+
+| Test | Senaryo | Beklenen | Sonuc |
+|------|---------|----------|-------|
+| Port cakismasi fallback | Port 8000 dolu iken calistirma | `--port 8001` ile acilir | PASSED |
+| Tab kapaninca auto-exit | `AUTO_EXIT_ON_NO_CLIENTS=1` iken tab kapatma | Grace sure sonra process kapanir | PASSED |
 
 ---
 

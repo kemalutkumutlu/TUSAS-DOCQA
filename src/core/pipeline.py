@@ -8,6 +8,7 @@ Used by:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -91,17 +92,92 @@ class RAGPipeline:
         """User-facing filenames currently loaded in this session."""
         return [st.file_name for st in self._documents.values()]
 
+    @staticmethod
+    def _normalize_doc_ref(text: str) -> str:
+        """
+        Normalize user text / filenames for fuzzy matching.
+        Keeps only letters+digits, collapses separators, strips extension-like suffix.
+        """
+        s = (text or "").strip().lower()
+        # Remove a common extension mention (user might omit it anyway)
+        s = re.sub(r"\.(pdf|png|jpg|jpeg)\b", "", s)
+        # Normalize separators to spaces
+        s = re.sub(r"[_\-\.\(\)\[\]\{\}]+", " ", s)
+        # Remove everything else except letters/digits (keep Turkish letters)
+        s = re.sub(r"[^0-9a-zçğıöşüâîû\s]+", " ", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    @classmethod
+    def _doc_match_score(cls, query: str, file_name: str) -> float:
+        """
+        Return a 0..1 confidence score that `query` refers to `file_name`.
+        Conservative: exact equality/stem equality > substring > token overlap.
+        """
+        qn = cls._normalize_doc_ref(query)
+        fn = cls._normalize_doc_ref(file_name)
+        if not qn or not fn:
+            return 0.0
+
+        stem = cls._normalize_doc_ref(Path(file_name).stem)
+
+        # Strong signals
+        if qn == fn or qn == stem:
+            return 1.0
+
+        # Medium: query contains full filename/stem (common when user writes a partial phrase)
+        if stem and len(stem) >= 3 and stem in qn:
+            # Longer stems yield higher confidence
+            return min(0.95, 0.60 + 0.35 * min(1.0, len(stem) / 18.0))
+        if fn and len(fn) >= 6 and fn in qn:
+            return 0.85
+
+        # Weak: token overlap (require at least one meaningful token)
+        q_tokens = {t for t in qn.split() if len(t) >= 3}
+        f_tokens = {t for t in stem.split() if len(t) >= 3} or {t for t in fn.split() if len(t) >= 3}
+        if not q_tokens or not f_tokens:
+            return 0.0
+        inter = q_tokens & f_tokens
+        if not inter:
+            return 0.0
+        # Guard against overly-generic overlaps (e.g. only "doc").
+        # If we only match a single short token (<=3) with no digits, treat as no match.
+        if len(inter) == 1:
+            t = next(iter(inter))
+            if len(t) <= 3 and not any(ch.isdigit() for ch in t):
+                return 0.0
+        # Prefer higher overlap and longer tokens
+        overlap = len(inter) / max(1, len(f_tokens))
+        longest = max((len(t) for t in inter), default=0)
+        return min(0.80, 0.25 + 0.55 * overlap + 0.05 * min(10, longest) / 10.0)
+
     def set_active_document(self, file_name: str) -> bool:
         """
         Set active document by (case-insensitive) filename match.
+        Also supports unique partial matches (e.g., "case_study" matches "Case_Study_20260205.pdf").
         Returns True if matched, False otherwise.
         """
         target = (file_name or "").strip().lower()
         if not target:
             return False
+
+        # 1) Exact (case-insensitive) match
         for did, st in self._documents.items():
             if (st.file_name or "").lower() == target:
                 self._active_doc_id = did
+                return True
+
+        # 2) Unique fuzzy match (avoid surprising switches when ambiguous)
+        scored: list[tuple[float, str]] = []
+        for did, st in self._documents.items():
+            sc = self._doc_match_score(target, st.file_name or "")
+            if sc > 0:
+                scored.append((sc, did))
+        scored.sort(reverse=True, key=lambda x: x[0])
+        if scored and scored[0][0] >= 0.55:
+            # If top is clearly better than second, accept it.
+            if len(scored) == 1 or (scored[0][0] - scored[1][0]) >= 0.12:
+                self._active_doc_id = scored[0][1]
                 return True
         return False
 
@@ -111,7 +187,7 @@ class RAGPipeline:
 
         Rules:
         - If only one document is loaded → use it.
-        - If query mentions a known filename → route to that doc.
+        - If query mentions a known filename (exact or partial) → route to that doc.
         - Else → route to the last uploaded / active doc (if any).
         """
         if not self._documents:
@@ -119,11 +195,17 @@ class RAGPipeline:
         if len(self._documents) == 1:
             return next(iter(self._documents.keys()))
 
-        q = query.lower()
+        # Prefer explicit mention in the user's message.
+        scored: list[tuple[float, str]] = []
         for did, st in self._documents.items():
-            fname = (st.file_name or "").lower()
-            if fname and fname in q:
-                return did
+            sc = self._doc_match_score(query, st.file_name or "")
+            if sc > 0:
+                scored.append((sc, did))
+        scored.sort(reverse=True, key=lambda x: x[0])
+        if scored and scored[0][0] >= 0.55:
+            # Avoid wrong routing when ambiguous; fall back to active doc.
+            if len(scored) == 1 or (scored[0][0] - scored[1][0]) >= 0.12:
+                return scored[0][1]
         return self._active_doc_id
 
     @property

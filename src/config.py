@@ -9,6 +9,7 @@ import os
 
 
 LLMProvider = Literal["none", "openai", "gemini"]
+VLMMode = Literal["off", "auto", "force"]
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,10 @@ class Settings:
     tesseract_cmd: Optional[str]
     tessdata_prefix: Optional[str]
 
+    # VLM (multimodal extract-only) controls
+    vlm_mode: VLMMode
+    vlm_max_pages: int
+
 
 def load_settings() -> Settings:
     # Load .env if present (dev-friendly)
@@ -42,6 +47,19 @@ def load_settings() -> Settings:
     tesseract_cmd = os.getenv("TESSERACT_CMD", "").strip() or None
     tessdata_prefix = os.getenv("TESSDATA_PREFIX", "").strip() or None
 
+    # VLM: keep UI behavior by default (force, 25 pages), but allow env override.
+    vlm_mode_raw = os.getenv("VLM_MODE", "force").strip().lower()
+    vlm_mode: VLMMode = "force"
+    if vlm_mode_raw in ("off", "auto", "force"):
+        vlm_mode = vlm_mode_raw  # type: ignore[assignment]
+
+    try:
+        vlm_max_pages = int(os.getenv("VLM_MAX_PAGES", "25").strip())
+    except Exception:
+        vlm_max_pages = 25
+    # Safety clamp (avoid accidental huge costs)
+    vlm_max_pages = max(0, min(200, vlm_max_pages))
+
     return Settings(
         llm_provider=llm_provider,
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
@@ -53,5 +71,7 @@ def load_settings() -> Settings:
         chroma_dir=chroma_dir,
         tesseract_cmd=tesseract_cmd,
         tessdata_prefix=tessdata_prefix,
+        vlm_mode=vlm_mode,
+        vlm_max_pages=vlm_max_pages,
     )
 

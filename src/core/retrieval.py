@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional, Set, Tuple
@@ -49,6 +50,20 @@ def classify_query(query: str) -> QueryIntent:
         if pat.search(query):
             return "section_list"
     return "normal_qa"
+
+
+def _section_fetch_max_depth() -> int:
+    """
+    Depth limit for section subtree fetch (document-agnostic).
+    Default keeps current behavior (≈ children + grandchildren).
+    """
+    raw = (os.getenv("SECTION_FETCH_MAX_DEPTH", "2") or "").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 2
+    # Clamp to avoid accidental explosions.
+    return max(0, min(10, n))
 
 
 # ── 2) Evidence gathering ────────────────────────────────────────────────────
@@ -166,7 +181,13 @@ def _pick_best_section(
 
 # ── Section + subtree fetch ──────────────────────────────────────────────────
 
-def _fetch_section_and_subtree(index: LocalIndex, doc_id: str, section_id: str) -> List[Evidence]:
+def _fetch_section_and_subtree(
+    index: LocalIndex,
+    doc_id: str,
+    section_id: str,
+    *,
+    max_depth: int = 2,
+) -> List[Evidence]:
     """
     Fetch the section's own chunks (parent + children) AND all chunks whose
     parent_id equals this section_id (the subtree).  This ensures that asking
@@ -180,33 +201,54 @@ def _fetch_section_and_subtree(index: LocalIndex, doc_id: str, section_id: str) 
         include=["documents", "metadatas"],
     )
 
-    # 2) Chunks whose parent_id is this section (sub-sections)
-    children_of = col.get(
-        where={"$and": [{"doc_id": doc_id}, {"parent_id": section_id}]},
-        include=["documents", "metadatas"],
-    )
+    # 2) Subtree fetch (depth-limited BFS on section hierarchy)
+    # We walk "section_id -> child sections" via:
+    #   parent chunk meta: parent_id == <parent_section_id>
+    # and we pull all chunks where parent_id == <current_section_id>, which includes:
+    #   - child chunks of the current section
+    #   - parent chunks of immediate sub-sections
+    max_depth = max(0, int(max_depth))
+    subtree_results = []
+    frontier: Set[str] = {section_id}
+    seen_sections: Set[str] = set(frontier)
 
-    # 3) Collect recursively: sub-sections may have their own children
-    # We do one more level (grandchildren) to cover e.g. 4.1.1
-    sub_section_ids: Set[str] = set()
-    for meta in children_of.get("metadatas", []):
-        sid = meta.get("section_id", "")
-        if sid and sid != section_id:
-            sub_section_ids.add(sid)
+    for _depth in range(max_depth):
+        if not frontier:
+            break
 
-    grandchildren_results = []
-    for sub_sid in sub_section_ids:
-        gc = col.get(
-            where={"$and": [{"doc_id": doc_id}, {"parent_id": sub_sid}]},
-            include=["documents", "metadatas"],
-        )
-        grandchildren_results.append(gc)
+        next_frontier: Set[str] = set()
+        for cur_sid in sorted(frontier):
+            res = col.get(
+                where={"$and": [{"doc_id": doc_id}, {"parent_id": cur_sid}]},
+                include=["documents", "metadatas"],
+            )
+            subtree_results.append(res)
+
+            # Discover immediate sub-sections: only parent chunks qualify as section nodes.
+            for meta in res.get("metadatas", []) or []:
+                try:
+                    if (meta or {}).get("kind") != "parent":
+                        continue
+                    sid = (meta or {}).get("section_id", "")
+                    pid = (meta or {}).get("parent_id", "")
+                    if not sid or sid == cur_sid:
+                        continue
+                    if pid != cur_sid:
+                        continue
+                    if sid in seen_sections:
+                        continue
+                    seen_sections.add(sid)
+                    next_frontier.add(sid)
+                except Exception:
+                    continue
+
+        frontier = next_frontier
 
     # Merge all into a single evidence list (deduplicated)
     seen: Set[str] = set()
     evidences: List[Evidence] = []
 
-    for result_set in [own, children_of] + grandchildren_results:
+    for result_set in [own] + subtree_results:
         ids = result_set.get("ids", [])
         docs = result_set.get("documents", [])
         metas = result_set.get("metadatas", [])
@@ -385,7 +427,12 @@ def retrieve(
         if best:
             best_doc_id, best_section_id = best
             # Complete section + subtree fetch
-            section_evidences = _fetch_section_and_subtree(index, best_doc_id, best_section_id)
+            section_evidences = _fetch_section_and_subtree(
+                index,
+                best_doc_id,
+                best_section_id,
+                max_depth=_section_fetch_max_depth(),
+            )
 
             # Coverage info from the parent chunk text
             coverage = None

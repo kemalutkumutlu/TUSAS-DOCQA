@@ -6,6 +6,8 @@ Run:
 """
 from __future__ import annotations
 
+import asyncio
+import os
 import re
 import shutil
 import tempfile
@@ -20,6 +22,54 @@ from src.core.vlm_extract import VLMConfig
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+# Auto-exit (dev convenience): if enabled, kill the server when the last client disconnects.
+# This prevents "port already in use" when you close the browser tab but forget the terminal.
+_ACTIVE_CHAT_SESSIONS = 0
+_EXIT_TASK: asyncio.Task | None = None
+_EXIT_LOCK = asyncio.Lock()
+
+
+def _auto_exit_enabled() -> bool:
+    v = (os.getenv("AUTO_EXIT_ON_NO_CLIENTS", "") or "").strip().lower()
+    return v in ("1", "true", "yes", "y", "on")
+
+
+def _auto_exit_grace_seconds() -> float:
+    raw = (os.getenv("AUTO_EXIT_GRACE_SECONDS", "8") or "").strip()
+    try:
+        sec = float(raw)
+    except Exception:
+        sec = 8.0
+    return max(0.0, min(120.0, sec))
+
+
+async def _cancel_exit_task() -> None:
+    global _EXIT_TASK
+    if _EXIT_TASK and not _EXIT_TASK.done():
+        _EXIT_TASK.cancel()
+    _EXIT_TASK = None
+
+
+async def _schedule_auto_exit_if_idle() -> None:
+    """
+    If enabled and no active sessions remain, exit the process after a grace period.
+    """
+    global _EXIT_TASK
+    if not _auto_exit_enabled():
+        return
+    grace = _auto_exit_grace_seconds()
+
+    async def _worker() -> None:
+        await asyncio.sleep(grace)
+        # Double-check state right before exiting.
+        async with _EXIT_LOCK:
+            if _ACTIVE_CHAT_SESSIONS <= 0:
+                os._exit(0)  # noqa: S404 - intentional hard-exit for dev convenience
+
+    await _cancel_exit_task()
+    _EXIT_TASK = asyncio.create_task(_worker())
+
 
 ACCEPTED_MIME = [
     "application/pdf",
@@ -164,7 +214,8 @@ def _get_pipeline() -> RAGPipeline:
                 model=settings.gemini_model,
                 # Quality-first: always extract via VLM (extract-only prompt).
                 # This is more robust for complex layouts (tables/multi-column/CVs).
-                mode="force",
+                mode=settings.vlm_mode,
+                max_pages=settings.vlm_max_pages,
             ),
         )
         cl.user_session.set("pipeline", pipeline)
@@ -201,6 +252,17 @@ async def on_chat_start():
     settings = load_settings()
     cl.user_session.set("mode", "doc")
 
+    # Track active sessions for optional auto-exit behavior.
+    async with _EXIT_LOCK:
+        global _ACTIVE_CHAT_SESSIONS
+        _ACTIVE_CHAT_SESSIONS += 1
+        await _cancel_exit_task()
+        if _auto_exit_enabled():
+            print(
+                f"[auto-exit] enabled, active_sessions={_ACTIVE_CHAT_SESSIONS}",
+                flush=True,
+            )
+
     if settings.llm_provider != "gemini" or not settings.gemini_api_key:
         await cl.Message(
             content=(
@@ -222,6 +284,21 @@ async def on_chat_start():
             "- Birden fazla belge varsa aktif belge seçmek için: `/use <dosya>`\n"
         )
     ).send()
+
+
+@cl.on_chat_end
+async def on_chat_end() -> None:
+    # Decrement active sessions and auto-exit if enabled.
+    async with _EXIT_LOCK:
+        global _ACTIVE_CHAT_SESSIONS
+        _ACTIVE_CHAT_SESSIONS = max(0, _ACTIVE_CHAT_SESSIONS - 1)
+        if _ACTIVE_CHAT_SESSIONS == 0:
+            if _auto_exit_enabled():
+                print(
+                    f"[auto-exit] last client disconnected, exiting in {_auto_exit_grace_seconds()}s",
+                    flush=True,
+                )
+            await _schedule_auto_exit_if_idle()
 
 
 def _process_uploaded_file_sync(file_path: str, file_name: str) -> str:
@@ -303,6 +380,8 @@ async def on_message(message: cl.Message):
         name = query[5:].strip()
         ok = pipeline.set_active_document(name)
         if ok:
+            # Show the resolved active doc filename when possible.
+            docs = pipeline.list_documents() if pipeline else []
             await cl.Message(content=f"Aktif belge ayarlandı: **{name}**").send()
         else:
             docs = pipeline.list_documents() if pipeline else []

@@ -1,5 +1,6 @@
 .env
 .venv/
+.venv-gpu/
 __pycache__/
 *.pyc
 
@@ -15,3 +16,6 @@ Thumbs.db
 
 # Chainlit local runtime/config cache (generated)
 .chainlit/
+
+# Chainlit uploaded assets (generated)
+.files/

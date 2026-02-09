@@ -104,6 +104,20 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
   - Dogal dil komutlari: “sohbet moduna gec”, “belge moduna nasil donecem” gibi istekler otomatik algilanir
 - `chainlit.md`: Acilis ekrani metni
 
+## Faz 6.1 — Dev UX: Port cakismasi ve otomatik cikis
+- **Sorun**: Windows'ta `chainlit run app.py -w` sonrasi tab kapatilinca process arkaplanda kalabiliyor → tekrar baslatmada `Errno 10048` (port 8000 in use).
+- **Cozum (opsiyonel, bozmadan)**:
+  - `app.py` icine `on_chat_end` hook'u ile “son client disconnect olunca grace sure sonra exit” eklendi.
+  - `.env` / `.env.example`:
+    - `AUTO_EXIT_ON_NO_CLIENTS=1`
+    - `AUTO_EXIT_GRACE_SECONDS=8`
+  - Davranis sadece env ile acilinca aktif; default etkisiz.
+
+## Faz 6.2 — GPU notu (embedding hizlandirma)
+- GPU, bu projede **yalnizca embedding** tarafinda etkilidir (SentenceTransformers / PyTorch).
+- Gemini LLM/VLM API cagirilari uzak servis oldugu icin GPU ile hizlanmaz.
+- README'ye “GPU notu + runtime device dogrulama” komutu eklendi.
+
 ## Sonraki Adimlar
 - Uçtan uca testleri farkli PDF tipleriyle genislet (tarama PDF, tablo agirlikli, cok kolonlu)
 - Demo video

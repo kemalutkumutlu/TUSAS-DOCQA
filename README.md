@@ -40,6 +40,16 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+### (Opsiyonel) GPU Notu (Embedding Hizlandirma)
+
+Bu projede GPU, **sadece embedding** (SentenceTransformers) tarafinda etkilidir. Gemini LLM/VLM API oldugu icin GPU ile hizlanmaz.
+
+- GPU’yu dogrulama (runtime):
+
+```bash
+python -c "from src.core.embedding import Embedder; e=Embedder('intfloat/multilingual-e5-small'); e.embed_query('test'); print('device:', e._model.device)"
+```
+
 ### 2) (Opsiyonel) OCR — Taranmis PDF ve Gorseller icin
 
 [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) yukleyin.
@@ -47,6 +57,36 @@ PATH'de degilse `.env`'de `TESSERACT_CMD` ayarlayin.
 
 **Not (Windows izinleri):** Turkce dil paketi (tur.traineddata) icin Program Files'a yazamiyorsaniz,
 `.env` icinde `TESSDATA_PREFIX` ile kullanici-yazilabilir bir klasor belirtebilirsiniz.
+
+#### Kurulum (winget ile)
+
+```bash
+winget install -e --id UB-Mannheim.TesseractOCR --accept-package-agreements --accept-source-agreements
+```
+
+#### Dil dosyalari (TR/EN) — projeye lokal kurulum (onerilen)
+
+Bu proje varsayilan olarak OCR dilini `tur+eng` kullanir. Admin izni gerektirmeden calismasi icin
+`tur.traineddata` ve `eng.traineddata` dosyalarini proje altina koyabilirsiniz:
+
+```bash
+mkdir -Force .\data\tessdata
+```
+
+PowerShell ile hızlı indirme (tessdata_fast):
+
+```bash
+$base = "https://github.com/tesseract-ocr/tessdata_fast/raw/main"
+Invoke-WebRequest -Uri "$base/tur.traineddata" -OutFile .\data\tessdata\tur.traineddata
+Invoke-WebRequest -Uri "$base/eng.traineddata" -OutFile .\data\tessdata\eng.traineddata
+```
+
+Ardindan `.env` icinde:
+
+```ini
+TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
+TESSDATA_PREFIX=./data/tessdata
+```
 
 ### 3) API Anahtari
 
@@ -56,6 +96,21 @@ PATH'de degilse `.env`'de `TESSERACT_CMD` ayarlayin.
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your-api-key-here
 GEMINI_MODEL=gemini-2.0-flash
+```
+
+> Guvenlik: `GEMINI_API_KEY` degerini repo'ya commit etmeyin. Sadece lokal `.env`'de tutun.
+
+### 3.1) (Opsiyonel) VLM Ayarlari (Layout/Tablo icin)
+
+Karmasik PDF layout'lari (tablo, cok kolon, CV vb.) icin sistem sayfa goruntusunden **extract-only**
+metin cikarmak uzere VLM (Gemini multimodal) kullanabilir.
+
+Varsayilan davranis UI ile uyumludur: `VLM_MODE=force` ve `VLM_MAX_PAGES=25`.
+Isterseniz `.env` icinde degistirebilirsiniz:
+
+```ini
+VLM_MODE=off
+VLM_MAX_PAGES=25
 ```
 
 ### 4) Uygulamayi Baslatin
@@ -87,6 +142,34 @@ Case study dokumani icin katı kabul kriterlerini otomatik kontrol etmek icin:
 python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 ```
 
+### LLM gerektirmeyen hizli regresyon (onerilen)
+
+LLM anahtari olmadan, sentetik PDF’ler uzerinden core pipeline’i (ingestion/structure/indexing/retrieval)
+kontrol etmek icin:
+
+```bash
+python scripts/baseline_gate.py
+```
+
+### Troubleshooting (Windows)
+
+- **Port 8000 zaten kullanimda / tab kapandi ama process durmadi**:
+  - Hızlı cozum: farkli portla baslatin:
+
+    ```bash
+    chainlit run app.py -w --port 8001
+    ```
+
+  - Gelistirme kolayligi (onerilen): tab/connection kapaninca process’in otomatik cikmasi icin `.env` icine ekleyin:
+
+    ```ini
+    AUTO_EXIT_ON_NO_CLIENTS=1
+    AUTO_EXIT_GRACE_SECONDS=8
+    ```
+
+- **HuggingFace symlink uyarisi**: Embedding modeli ilk calistirmada indirilebilir ve Windows’ta symlink desteklenmiyorsa uyarı gorebilirsiniz. Developer Mode acmak veya admin olarak calistirmak uyarıyı azaltır; islevsel olarak calismaya devam eder.
+- **Model 404 / NOT_FOUND**: `GEMINI_MODEL` hesabinizda aktif degilse `.env` icinde `gemini-2.0-flash` gibi daha yaygin bir modele gecin.
+
 ## Proje Yapisi
 
 ```
@@ -95,8 +178,10 @@ python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 ├── chainlit.md                 # UI acilis ekrani
 ├── .env.example                # Ornek konfigrasyon
 ├── requirements.txt            # Python bagimliliklari
+├── GPU_REQUIREMENTS.md         # (Opsiyonel) GPU kurulum ve dogrulama
 ├── DEVLOG.md                   # Gelistirme sureci kaydi
 ├── TESTING.md                  # Test senaryolari ve sonuclari
+├── TESTLOG.md                  # Kosum/sonuc odakli kisa test gunlugu
 ├── src/
 │   ├── config.py               # Ortam degiskenleri yukleyici
 │   └── core/
@@ -117,6 +202,9 @@ python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 │   ├── preview_structure.py    # CLI: section tree goruntuleme
 │   ├── build_index.py          # CLI: index olusturma
 │   ├── search_index.py         # CLI: hybrid search testi
+│   ├── baseline_gate.py        # LLM-free core RAG gate (sentetik PDF)
+│   ├── smoke_suite.py          # Multi-doc izolasyon smoke testleri
+│   ├── eval_case_study.py      # Case Study kabul kapisi (Gemini gerekir)
 │   ├── test_retrieval.py       # CLI: retrieval pipeline testi
 │   └── test_generation.py      # CLI: uctan uca generation testi
 └── data/

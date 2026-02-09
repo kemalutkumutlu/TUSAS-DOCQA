@@ -380,7 +380,6 @@ def generate_chat_answer(
 
     # Should never reach here
     raise last_err  # type: ignore[misc]
-    return (resp.text or "").strip() or "Anlayamadım, tekrar eder misin?"
 
 
 # ── Main generation function ─────────────────────────────────────────────────
