@@ -1,6 +1,6 @@
 # TUSAS LLM Case Study — Belge Analiz ve Soru-Cevap Sistemi
 
-[![CI](https://github.com/<OWNER>/<REPO>/actions/workflows/ci.yml/badge.svg)](https://github.com/<OWNER>/<REPO>/actions/workflows/ci.yml)
+[![CI](https://github.com/kemalutkumutlu/TUSAS-DOCQA/actions/workflows/ci.yml/badge.svg)](https://github.com/kemalutkumutlu/TUSAS-DOCQA/actions/workflows/ci.yml)
 
 Yapay zeka destekli **Belge Analiz ve Soru-Cevap** sistemi. PDF ve gorsel belgeleri yukleyerek doğal dil ile soru sorun, kaynakli ve dogrulanmis cevaplar alin.
 
