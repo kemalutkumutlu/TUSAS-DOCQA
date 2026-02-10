@@ -8,17 +8,20 @@ Used by:
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
+from uuid import uuid4
 
 from .generation import GenerationResult, generate_answer, generate_chat_answer
+from .eventlog import JsonlEventLogger
 from .indexing import LocalIndex
 from .ingestion import OCRConfig, ingest_any, IngestResult
 from .vlm_extract import VLMConfig
 from .models import Chunk
-from .retrieval import RetrievalResult, retrieve
+from .retrieval import RetrievalResult, retrieve, classify_query
 from .structure import build_section_tree, section_tree_to_chunks
 
 
@@ -50,6 +53,21 @@ class RAGPipeline:
     _index: Optional[LocalIndex] = None
     _all_chunks: List[Chunk] = field(default_factory=list)
     _active_doc_id: Optional[str] = None
+    _session_id: str = field(default_factory=lambda: uuid4().hex)
+    _logger: Optional[JsonlEventLogger] = None
+
+    def _get_logger(self) -> Optional[JsonlEventLogger]:
+        """
+        Lazy-create logger from env. Logging is OFF by default.
+        """
+        if self._logger is not None:
+            return self._logger
+        self._logger = JsonlEventLogger.from_env()
+        return self._logger
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
 
     def add_document(self, file_path: Path, display_name: Optional[str] = None) -> DocumentState:
         """
@@ -80,11 +98,47 @@ class RAGPipeline:
         for doc_state in self._documents.values():
             self._all_chunks.extend(doc_state.chunks)
 
+        # If we couldn't extract any chunks (empty PDF, OCR missing, etc.), keep the
+        # document state but avoid building an empty index (some backends reject empty upserts).
+        if not self._all_chunks:
+            state.warnings = list(state.warnings) + [
+                "Bu belgeden metin/bolum cikarilamadi (bos veya OCR gerektiriyor olabilir)."
+            ]
+            self._index = None
+            lg = self._get_logger()
+            if lg:
+                lg.log(
+                    session_id=self._session_id,
+                    event="doc_added",
+                    payload={
+                        "doc_name": state.file_name,
+                        "doc_id": state.doc_id,
+                        "page_count": state.page_count,
+                        "chunk_count": len(state.chunks),
+                        "warnings": state.warnings,
+                    },
+                )
+            return state
+
         self._index = LocalIndex.build(
             chunks=self._all_chunks,
             chroma_dir=self.chroma_dir,
             embedding_model=self.embedding_model,
         )
+
+        lg = self._get_logger()
+        if lg:
+            lg.log(
+                session_id=self._session_id,
+                event="doc_added",
+                payload={
+                    "doc_name": state.file_name,
+                    "doc_id": state.doc_id,
+                    "page_count": state.page_count,
+                    "chunk_count": len(state.chunks),
+                    "warnings": state.warnings,
+                },
+            )
 
         return state
 
@@ -213,6 +267,19 @@ class RAGPipeline:
         return bool(self._documents)
 
     @property
+    def has_index(self) -> bool:
+        """True if at least one chunk is indexed and retrieval can run."""
+        return self._index is not None and bool(self._all_chunks)
+
+    @property
+    def active_document_name(self) -> Optional[str]:
+        """User-facing active document filename (if any)."""
+        if not self._active_doc_id:
+            return None
+        st = self._documents.get(self._active_doc_id)
+        return st.file_name if st else None
+
+    @property
     def document_count(self) -> int:
         return len(self._documents)
 
@@ -226,18 +293,79 @@ class RAGPipeline:
         Raises ValueError if no documents have been indexed.
         """
         if self._index is None:
-            raise ValueError("No documents indexed. Upload a document first.")
+            # No chunks indexed (empty/scanned doc without OCR, etc.). Return safe "not found".
+            empty = RetrievalResult(intent=classify_query(query), evidences=[], section_complete=False, coverage=None)
+            result = generate_answer(
+                retrieval=empty,
+                query=query,
+                gemini_api_key=self.gemini_api_key,
+                gemini_model=self.gemini_model,
+            )
+            lg = self._get_logger()
+            if lg:
+                lg.log(
+                    session_id=self._session_id,
+                    event="qa",
+                    payload={
+                        "query": query,
+                        "intent": empty.intent,
+                        "active_doc_name": self.active_document_name,
+                        "active_doc_id": self._active_doc_id,
+                        "documents": self.list_documents(),
+                        "doc_count": self.document_count,
+                        "evidence_count": 0,
+                        "section_complete": False,
+                        "coverage_expected": None,
+                        "coverage_actual": None,
+                        "coverage_ok": None,
+                        "citations_found": result.citations_found,
+                        "answer": result.answer,
+                        **(
+                            {"context_preview": result.context_preview}
+                            if (lg.include_context_preview and result.context_preview)
+                            else {}
+                        ),
+                    },
+                )
+            return result
 
         doc_hint = self._resolve_doc_id_hint(query)
         ret = retrieve(self._index, query, doc_id=doc_hint)
 
-        return generate_answer(
+        result = generate_answer(
             retrieval=ret,
             query=query,
             gemini_api_key=self.gemini_api_key,
             gemini_model=self.gemini_model,
         )
+        lg = self._get_logger()
+        if lg:
+            lg.log(
+                session_id=self._session_id,
+                event="qa",
+                payload={
+                    "query": query,
+                    "intent": ret.intent,
+                    "active_doc_name": self.active_document_name,
+                    "active_doc_id": doc_hint,
+                    "documents": self.list_documents(),
+                    "doc_count": self.document_count,
+                    "evidence_count": len(ret.evidences),
+                    "section_complete": bool(ret.section_complete),
+                    "coverage_expected": ret.coverage.expected_items if ret.coverage else None,
+                    "coverage_actual": result.coverage_actual,
+                    "coverage_ok": result.coverage_ok,
+                    "citations_found": result.citations_found,
+                    "answer": result.answer,
+                    **(
+                        {"context_preview": result.context_preview}
+                        if (lg.include_context_preview and result.context_preview)
+                        else {}
+                    ),
+                },
+            )
 
+        return result
     def chat(self, query: str) -> str:
         """
         Chat-only mode (no retrieval).
@@ -253,6 +381,6 @@ class RAGPipeline:
         Retrieve evidence without generation (useful for debugging).
         """
         if self._index is None:
-            raise ValueError("No documents indexed.")
+            return RetrievalResult(intent=classify_query(query), evidences=[], section_complete=False, coverage=None)
         doc_hint = self._resolve_doc_id_hint(query)
         return retrieve(self._index, query, doc_id=doc_hint)

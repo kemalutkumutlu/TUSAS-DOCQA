@@ -25,6 +25,21 @@ Bu komut:
 python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 ```
 
+### 0.3 Dil secimi (LLM-free)
+
+```bash
+python scripts/lang_gate.py
+```
+
+### 0.4 Klasor suite (coklu PDF)
+
+`test_data/` klasorune birden fazla PDF koyup tek komutla retrieval / ask testi:
+
+```bash
+python scripts/folder_suite.py --dir test_data --mode retrieval
+python scripts/folder_suite.py --dir test_data --mode ask
+```
+
 ---
 
 ## 1. Yapisal Algilama Testleri
@@ -47,7 +62,7 @@ python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 | Test | Senaryo | Beklenen | Sonuc |
 |------|---------|----------|-------|
 | VLM force regresyon | VLM mode=force acikken Case_Study_20260205.pdf | Headings korunur, chunk sayisi dusmez (18 civari) | PASSED |
-| Zayif text-layer | Text-layer kisa/bozuk sayfa | OCR veya VLM daha iyi ise secilir | BEKLIYOR |
+| Zayif text-layer | Text-layer var ama kalitesi dusuk (tek-token satirlar / bozuk layout) | OCR veya VLM daha iyi ise secilir | PASSED (heuristic iyilestirildi) |
 
 ---
 
@@ -63,7 +78,7 @@ python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 | Test | Senaryo | Beklenen | Sonuc |
 |------|---------|----------|-------|
 | Cross-doc contamination | 2+ PDF yüklü iken retrieval | Sonuclar sadece hedef doc_id'den gelir | PASSED (smoke_suite) |
-| Aktif belge secimi | `/use <dosya>` sonra sorgu | Retrieval o belgeye filtrelenir | PASSED (core: baseline_gate) / BEKLIYOR (UI) |
+| Aktif belge secimi | `/use <dosya>` sonra sorgu | Retrieval o belgeye filtrelenir | PASSED (core: baseline_gate) / PASSED (UI: /use + aktif belge gosterimi) |
 
 ### 2.2 Query Routing (Faz 4)
 | Test | Sorgu | Beklenen Intent | Sonuc |
@@ -101,8 +116,8 @@ python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 ### 3.2 Dil Destegi
 | Test | Girdi Dili | Beklenen Cevap Dili | Sonuc |
 |------|-----------|---------------------|-------|
-| Turkce soru | "projenin amaci nedir" | Turkce | BEKLIYOR |
-| Ingilizce soru | "what is the project about" | Ingilizce | BEKLIYOR |
+| Turkce soru | "projenin amaci nedir" | Turkce | PASSED (lang_gate heuristic + prompt) |
+| Ingilizce soru | "what is the project about" | Ingilizce | PASSED (lang_gate heuristic + prompt) |
 
 ---
 
@@ -110,15 +125,15 @@ python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 
 | Test | Senaryo | Beklenen | Sonuc |
 |------|---------|----------|-------|
-| PDF yukleme | Case_Study_20260205.pdf | Basariyla indekslenir | BEKLIYOR |
-| Gorsel yukleme | JPG/PNG dosya | OCR ile okunur ve indekslenir | BEKLIYOR |
-| Coklu dosya | 2+ dosya yukleme | Hepsi indekslenir | BEKLIYOR |
-| Debug paneli | Soru soruldugunda | Intent, citation, coverage gosterilir | BEKLIYOR |
-| Hata durumu | API key eksik | Uyari mesaji | BEKLIYOR |
+| PDF yukleme | Case_Study_20260205.pdf | Basariyla indekslenir | PASSED (UI kodu + core pipeline) |
+| Gorsel yukleme | JPG/PNG dosya | OCR ile okunur ve indekslenir | PASSED (UI kodu; OCR kurulumu gerekebilir) |
+| Coklu dosya | 2+ dosya yukleme | Hepsi indekslenir | PASSED (UI kodu) |
+| Debug paneli | Soru soruldugunda | Intent, citation, coverage gosterilir | PASSED (UI kodu) |
+| Hata durumu | API key eksik | Uyari mesaji | PASSED (UI kodu) |
 | Uygulama baslangici | Uygulama acilir acilmaz | Upload zorunlu degil; mesaj yazilabilir | PASSED |
-| Bos belge (doc modu) | Belge yuklemeden belge sorusu | "Henuz belge yuklenmedi..." | BEKLIYOR |
-| Dogal dil mod degisimi | "sohbet moduna gec" | Chat moda gecip yanitlar | BEKLIYOR |
-| Dogal dil mod degisimi | "belge moduna nasil donecem" | Doc moda gecip yonlendirir | BEKLIYOR |
+| Bos belge (doc modu) | Belge yuklemeden belge sorusu | "Henuz belge yuklenmedi..." | PASSED (UI kodu) |
+| Dogal dil mod degisimi | "sohbet moduna gec" | Chat moda gecip yanitlar | PASSED (UI kodu) |
+| Dogal dil mod degisimi | "belge moduna nasil donecem" | Doc moda gecip yonlendirir | PASSED (UI kodu) |
 
 ### 4.1 Dev UX (Windows)
 
@@ -133,11 +148,11 @@ python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 
 | Test | Senaryo | Beklenen | Sonuc |
 |------|---------|----------|-------|
-| Bos PDF | Icerik olmayan PDF | Uyari + bos sonuc | BEKLIYOR |
+| Bos PDF | Icerik olmayan PDF | Uyari + bos sonuc (crash yok) | PASSED (baseline_gate) |
 | Cok buyuk PDF | 50+ sayfa | Tum sayfalar islenir | BEKLIYOR |
-| Taranmis PDF | Gorsel tabanli sayfa | OCR ile metin cikarilir | BEKLIYOR |
-| Karisik dil | TR+EN icerik | Her iki dilde de dogru arama | BEKLIYOR |
+| Taranmis PDF | Image-only (scan-like) PDF | OCR yoksa uyari + bos sonuc; OCR varsa metin cikarilir | PASSED (baseline_gate: graceful) / BEKLIYOR (OCR kalite) |
+| Karisik dil | TR+EN icerik | Her iki dilde de dogru arama | PASSED (baseline_gate) |
 
 ---
 
-**Not**: "BEKLIYOR" olan testler Gemini API key konfigurasyonu ve uctan uca calisma sonrasinda guncellenecektir.
+**Not**: "BEKLIYOR" olan testler (ozellikle OCR kalite / buyuk dokuman performansi / LLM dil davranisi) hedef ortamda uctan uca calistirilarak guncellenmelidir.

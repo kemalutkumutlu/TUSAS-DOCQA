@@ -151,6 +151,31 @@ kontrol etmek icin:
 python scripts/baseline_gate.py
 ```
 
+### (Opsiyonel) Test klasoru + loglama (onerilen)
+
+Birden fazla PDF ile hizli denemek icin `test_data/` altina PDF’leri koyup:
+
+```bash
+python scripts/folder_suite.py --dir test_data --mode retrieval
+```
+
+LLM cevaplari + soru/cevap loglari icin (Gemini gerekir):
+
+```bash
+python scripts/folder_suite.py --dir test_data --mode ask
+```
+
+Soru/cevap loglarini acmak icin `.env` icine:
+
+```ini
+RAG_LOG=1
+RAG_LOG_DIR=./data/logs
+```
+
+Loglar JSONL formatinda yazilir:
+- `data/logs/rag_<YYYYMMDD>_session_<id>.jsonl`
+- `data/logs/by_doc/<dosya>.jsonl`
+
 ### Troubleshooting (Windows)
 
 - **Port 8000 zaten kullanimda / tab kapandi ama process durmadi**:

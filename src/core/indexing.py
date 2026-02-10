@@ -96,8 +96,11 @@ class LocalIndex:
         if doc_ids:
             # Only allow doc_ids that belong to this index instance.
             filtered = set(doc_ids) & set(self.allowed_doc_ids)
-            if filtered:
-                doc_ids_use = filtered
+            if not filtered:
+                # IMPORTANT: if caller asked to restrict to doc_ids but none are allowed,
+                # we must NOT fall back to an unrestricted search (that would leak other docs).
+                return HybridResult(ids=[], scores={})
+            doc_ids_use = filtered
 
         where = self._where_doc_ids(doc_ids_use) if doc_ids_use else None
         dense_ids = self.dense_search(query, top_k=dense_k, where=where)

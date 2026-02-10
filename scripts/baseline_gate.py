@@ -54,6 +54,43 @@ def _make_pdf(path: Path, pages: list[list[str]]) -> None:
         doc.close()
 
 
+def _make_blank_pdf(path: Path, *, pages: int = 1) -> None:
+    """Create a PDF with blank pages (no text layer)."""
+    import fitz  # PyMuPDF
+
+    doc = fitz.open()
+    try:
+        for _ in range(max(1, int(pages))):
+            doc.new_page()
+        doc.save(str(path))
+    finally:
+        doc.close()
+
+
+def _make_image_only_pdf(path: Path) -> None:
+    """Create a PDF that contains only an image (no selectable text)."""
+    import fitz  # PyMuPDF
+    from PIL import Image
+
+    # Create a simple blank image and embed it
+    img = Image.new("RGB", (800, 1000), color=(255, 255, 255))
+    # Save to bytes (PNG) for embedding
+    import io
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    img_bytes = buf.getvalue()
+
+    doc = fitz.open()
+    try:
+        page = doc.new_page()
+        rect = fitz.Rect(72, 72, 540, 770)
+        page.insert_image(rect, stream=img_bytes)
+        doc.save(str(path))
+    finally:
+        doc.close()
+
+
 def main() -> int:
     _setup_utf8()
     repo_root = Path(__file__).resolve().parents[1]
@@ -66,7 +103,7 @@ def main() -> int:
         return _fail("compileall failed")
     _ok("compileall")
 
-    # 2) Core RAG plumbing (LLM-free): ingestion → structure → chunking → index → retrieval
+    # 2) Empty / scan-like docs should not crash (no LLM, no embeddings required)
     try:
         # These imports require the runtime dependencies from requirements.txt.
         from src.core.ingestion import OCRConfig
@@ -86,6 +123,32 @@ def main() -> int:
     # on best-effort temp cleanup.
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         tmp = Path(td)
+
+        blank = tmp / "blank.pdf"
+        _make_blank_pdf(blank, pages=1)
+
+        scan_like = tmp / "scan_like.pdf"
+        _make_image_only_pdf(scan_like)
+
+        pipe_empty = RAGPipeline(
+            embedding_model="intfloat/multilingual-e5-small",
+            chroma_dir=tmp / "chroma_empty",
+            gemini_api_key="",  # LLM-free gate
+            gemini_model="gemini-2.0-flash",
+            ocr_config=OCRConfig(enabled=False, lang="tur+eng"),
+            vlm_config=VLMConfig(api_key="", model="gemini-2.0-flash", mode="off", max_pages=0),
+        )
+        st0 = pipe_empty.add_document(blank, display_name=blank.name)
+        st1 = pipe_empty.add_document(scan_like, display_name=scan_like.name)
+        if st0.chunks or st1.chunks:
+            return _fail("blank/scan-like PDFs should not yield chunks without OCR")
+        if pipe_empty.has_index:
+            return _fail("pipeline should have no index for empty documents")
+        if not st0.warnings or not st1.warnings:
+            return _fail("expected warnings for empty/scan-like ingestion")
+        _ok("empty/scan-like PDFs do not crash (no index)")
+
+        # 3) Core RAG plumbing (LLM-free): ingestion → structure → chunking → index → retrieval
 
         # Doc A: section-list + subtree scenario with a 3-level hierarchy (4 → 4.1 → 4.1.1).
         doc_a = tmp / "doc_a.pdf"
@@ -132,6 +195,7 @@ def main() -> int:
                 [
                     "1. Kişisel Bilgiler",
                     "Adres bilgisi: Ankara",
+                    "Address information: Ankara",
                     "2. İş Deneyimi",
                     "2020-2024: Yapay zeka mühendisi",
                 ]
@@ -188,6 +252,15 @@ def main() -> int:
         if st_b.doc_id not in doc_ids:
             return _fail("active-doc isolation failed (evidence doc_id mismatch)")
         _ok("multi-doc isolation")
+
+        # Mixed-language retrieval: English query should still retrieve English lines.
+        ret_b_en = pipe.get_retrieval("address information")
+        if not ret_b_en.evidences:
+            return _fail("expected evidences for English query on doc_b")
+        doc_ids_en = {ev.chunk_id.split(":", 1)[0] for ev in ret_b_en.evidences}
+        if st_b.doc_id not in doc_ids_en:
+            return _fail("English query routed to wrong document")
+        _ok("mixed-language retrieval")
 
         # Partial filename mention routing:
         # Even if active doc is B, mentioning "doc_a" in the query should route to doc_a.

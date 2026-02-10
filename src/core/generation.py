@@ -53,6 +53,79 @@ Kurallar:
 """
 
 
+# ── Language selection (lightweight, document-agnostic) ───────────────────────
+
+_TR_CHARS = set("çğıöşüÇĞİÖŞÜ")
+_EN_CUES = {
+    "what",
+    "why",
+    "who",
+    "when",
+    "where",
+    "how",
+    "list",
+    "enumerate",
+    "summarize",
+    "requirements",
+    "deliverables",
+    "project",
+    "document",
+    "pdf",
+    "section",
+    "page",
+    "about",
+}
+_TR_CUES = {
+    "nedir",
+    "nelerdir",
+    "listele",
+    "sırala",
+    "sirala",
+    "kaç",
+    "kac",
+    "belge",
+    "doküman",
+    "dokuman",
+    "sayfa",
+    "bölüm",
+    "bolum",
+    "madde",
+    "teslimat",
+    "gereksinim",
+}
+
+
+def _preferred_language(query: str) -> str:
+    """
+    Return "tr" or "en" based on lightweight cues.
+    We keep this conservative: default to Turkish unless the query clearly looks English.
+    """
+    q = (query or "").strip()
+    if not q:
+        return "tr"
+    if any(ch in _TR_CHARS for ch in q):
+        return "tr"
+
+    low = q.lower()
+    # Turkish cue words (ASCII-only Turkish writing included)
+    if any(w in low for w in _TR_CUES):
+        return "tr"
+    # English question cues
+    if any(w in low for w in _EN_CUES):
+        return "en"
+    # If it's mostly ASCII and contains typical English spacing, lean English.
+    if re.search(r"\b(what|how|why|when|where|who)\b", low):
+        return "en"
+    return "tr"
+
+
+def _language_addendum(query: str) -> str:
+    lang = _preferred_language(query)
+    if lang == "en":
+        return "\n\nCEVAP DILI: English. Answer strictly in English.\n"
+    return "\n\nCEVAP DILI: Türkçe. Yanıtı kesinlikle Türkçe ver.\n"
+
+
 # ── Context builder ──────────────────────────────────────────────────────────
 
 def _build_context(evidences: List[Evidence]) -> str:
@@ -366,7 +439,7 @@ def generate_chat_answer(
                 model=gemini_model,
                 contents=f"SORU: {query}",
                 config=types.GenerateContentConfig(
-                    system_instruction=_CHAT_SYSTEM_PROMPT,
+                    system_instruction=_CHAT_SYSTEM_PROMPT + _language_addendum(query),
                     temperature=0.4,
                     max_output_tokens=1024,
                 ),
@@ -429,7 +502,7 @@ def generate_answer(
     context = _build_context(retrieval.evidences)
 
     # Build system prompt
-    system = _SYSTEM_PROMPT_BASE
+    system = _SYSTEM_PROMPT_BASE + _language_addendum(query)
     coverage_expected: Optional[int] = None
     if retrieval.intent == "section_list" and retrieval.coverage:
         coverage_expected = retrieval.coverage.expected_items

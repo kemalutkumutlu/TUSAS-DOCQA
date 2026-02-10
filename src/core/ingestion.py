@@ -157,7 +157,12 @@ def ingest_pdf(
             # Heuristic: if text layer is missing/too small, try OCR.
             source = "pdf_text"
             ocr_text_norm = ""
-            if ocr.enabled and len(text_norm) < 40:
+            # NOTE: some PDFs have a "text layer" that is present but unusable (broken layout,
+            # single-token-per-line, etc.). Treat those pages as OCR candidates too.
+            should_try_ocr = ocr.enabled and (
+                len(pdf_text_norm) < 40 or _text_quality_low(pdf_text_norm)
+            )
+            if should_try_ocr:
                 try:
                     import pytesseract  # noqa: WPS433
 

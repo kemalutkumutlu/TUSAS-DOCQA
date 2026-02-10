@@ -380,9 +380,8 @@ async def on_message(message: cl.Message):
         name = query[5:].strip()
         ok = pipeline.set_active_document(name)
         if ok:
-            # Show the resolved active doc filename when possible.
-            docs = pipeline.list_documents() if pipeline else []
-            await cl.Message(content=f"Aktif belge ayarlandı: **{name}**").send()
+            resolved = pipeline.active_document_name or name
+            await cl.Message(content=f"Aktif belge ayarlandı: **{resolved}**").send()
         else:
             docs = pipeline.list_documents() if pipeline else []
             await cl.Message(content=f"Belge bulunamadı: **{name}**\nMevcut belgeler: {', '.join(docs) if docs else '(yok)'}").send()
@@ -428,6 +427,17 @@ async def on_message(message: cl.Message):
     if not pipeline.has_documents:
         await cl.Message(
             content="Henuz belge yuklenmedi. Lutfen once bir belge yukleyin. (Sohbet için `/chat` yazabilirsin.)"
+        ).send()
+        return
+    if not pipeline.has_index:
+        await cl.Message(
+            content=(
+                "Bu oturumda yuklenen belgelerden indeks olusturulamadi (metin cikarimi bos olabilir veya OCR/VLM gerekir).\n\n"
+                "- PDF/PNG/JPG’yi tekrar yuklemeyi dene\n"
+                "- Taranmis (image-only) PDF ise OCR kurulu oldugundan emin ol (README → OCR)\n"
+                "- (Opsiyonel) VLM aciksa VLM_MAX_PAGES limitini kontrol et\n\n"
+                "Sohbet için `/chat` yazabilirsin."
+            )
         ).send()
         return
 
