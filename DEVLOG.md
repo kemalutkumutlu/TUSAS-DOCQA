@@ -139,7 +139,42 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
 - `src/core/generation.py`:
   - TR/EN dil secimi icin hafif heuristik + sistem prompt addendum eklendi (LLM-free gate ile dogrulandi).
 - `scripts/baseline_gate.py`:
-  - Bos/scan-like PDF’lerin crash etmemesi ve mixed-language retrieval icin ek kapilar eklendi.
+  - Bos/scan-like PDF'lerin crash etmemesi ve mixed-language retrieval icin ek kapilar eklendi.
+
+## Faz 7 — Kalite ve Operasyon Iyilestirmeleri
+
+### 7.1 — CI / GitHub Actions
+- `.github/workflows/ci.yml`: Her push/PR'da `baseline_gate.py` + `lang_gate.py` otomatik calisir.
+- Opsiyonel: `GEMINI_API_KEY` secret tanimlanmissa `eval_case_study.py` ayrı job olarak kosturulur.
+
+### 7.2 — Mini Eval Set + Retrieval Metrikleri
+- `test_data/eval_questions.json`: 25 soruluk eval set (section_list + normal_qa + TR/EN + negatif)
+- `scripts/eval_retrieval.py`: LLM-free retrieval kalite olcumu (intent accuracy, section hit, heading hit, evidence recall, avg latency)
+
+### 7.3 — Incremental Indexing
+- `src/core/sparse.py`: `BM25Index.extend()` — yeni chunk'lari mevcut BM25 index'ine ekler (full rebuild yerine)
+- `src/core/indexing.py`: `LocalIndex.add_chunks()` — sadece yeni belgein chunk'larini embed eder
+- `src/core/pipeline.py`: `add_document()` artik incremental path kullaniyor (onceki belgeler tekrar embed edilmiyor)
+
+### 7.4 — BM25 Kaliciligi (Persist)
+- `src/core/sparse.py`: `save()` / `load()` metodlari eklendi — BM25 state pickle ile diske kaydedilir
+- `src/core/indexing.py`: `build()` ve `add_chunks()` sonrasi otomatik BM25 persist (`data/chroma/bm25_index.pkl`)
+- ChromaDB + BM25 birlikte kalici: restart sonrasi her iki index hazir
+
+### 7.5 — LLM-Free Extractive QA (Local Mode)
+- `src/core/generation.py`: `generate_extractive_answer()` — LLM olmadan belgeden dogrudan alinti + citation
+- `src/core/pipeline.py`: `llm_provider` field + `ask()` icinde extractive branching
+- `app.py`: `LLM_PROVIDER=none` iken extractive mod hoşgeldin mesaji (onceki hata yerine)
+- Artik disariya hicbir API cagrisi yapilmadan belge sorusu cevaplanabiliyor
+
+### 7.6 — Observability / Telemetry
+- `src/core/pipeline.py`: Index build suresi (`index_time_ms`), retrieval suresi (`retrieval_ms`), generation suresi (`generation_ms`) event log'a eklendi
+- `RAG_LOG=1` ile tum metrikler JSONL log'da gorunur
+
+### 7.7 — Dokumantasyon Guncellemeleri
+- `README.md`: CI badge, yeni ozellik tablosu, LLM_PROVIDER=none kullanimi, eval_retrieval komutu, proje agaci, tasarim kararlari, Gelecek Plan (Roadmap)
+- `TESTING.md`: eval_retrieval, CI, incremental indexing, extractive QA, observability test bolumleri
+- `DEVLOG.md`: Alternatif degerlendirmeler, zorluklar, zaman dagilimi, retrospektif
 
 ## Alternatif Degerlendirmeler ve Tasarim Kararlari
 
@@ -202,17 +237,18 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 
 ## Teknik Borc ve Sinirlamalar
 
-- **BM25 in-memory**: Her restart'ta rebuild. Kucuk veri setlerinde sorun degil, buyuk dokumanlarda fark edilir.
-- **Tam rebuild indexing**: Yeni dokuman eklendiginde tum embedding'ler yeniden hesaplaniyor. Incremental upsert ihtiyaci var.
-- **LLM bagimliligi**: `normal_qa` intent'te LLM olmadan cevap verilemiyor. Extractive fallback eklenmeli.
+- ~~**BM25 in-memory**: Her restart'ta rebuild.~~ → **COZULDU** (Faz 7.4): BM25 artik `data/chroma/bm25_index.pkl` olarak diske kaydediliyor.
+- ~~**Tam rebuild indexing**: Yeni dokuman eklendiginde tum embedding'ler yeniden hesaplaniyor.~~ → **COZULDU** (Faz 7.3): Incremental upsert ile sadece yeni chunk'lar embed ediliyor.
+- ~~**LLM bagimliligi**: normal_qa intent'te LLM olmadan cevap verilemiyor.~~ → **COZULDU** (Faz 7.5): `LLM_PROVIDER=none` ile extractive QA modu eklendi.
 - **Tek embedding model**: Model degistiginde tum index rebuild gerekiyor. Model versiyonlama/migration mekanizmasi yok.
 - **OCR kalite siniri**: Dusuk cozunurluklu tarama PDF'lerde OCR kalitesi degisken. Post-processing (spell check / denoise) yok.
 
 ## Sonraki Adimlar
-- Retrieval kalitesi icin mini eval set + metrikler
-- CI/CD pipeline (GitHub Actions)
-- Incremental indexing (doc basi)
-- LLM'siz extractive QA modu
-- Observability / telemetry
+- ~~Retrieval kalitesi icin mini eval set + metrikler~~ → TAMAM (Faz 7.2)
+- ~~CI/CD pipeline (GitHub Actions)~~ → TAMAM (Faz 7.1)
+- ~~Incremental indexing (doc basi)~~ → TAMAM (Faz 7.3)
+- ~~LLM'siz extractive QA modu~~ → TAMAM (Faz 7.5)
+- ~~Observability / telemetry~~ → TAMAM (Faz 7.6)
 - Demo video
 - Uctan uca testleri farkli PDF tipleriyle genislet
+- Reranker (cross-encoder) degerlendirmesi (Roadmap'te)
