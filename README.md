@@ -1,5 +1,7 @@
 # TUSAS LLM Case Study — Belge Analiz ve Soru-Cevap Sistemi
 
+[![CI](https://github.com/<OWNER>/<REPO>/actions/workflows/ci.yml/badge.svg)](https://github.com/<OWNER>/<REPO>/actions/workflows/ci.yml)
+
 Yapay zeka destekli **Belge Analiz ve Soru-Cevap** sistemi. PDF ve gorsel belgeleri yukleyerek doğal dil ile soru sorun, kaynakli ve dogrulanmis cevaplar alin.
 
 ## Mimari
@@ -7,9 +9,9 @@ Yapay zeka destekli **Belge Analiz ve Soru-Cevap** sistemi. PDF ve gorsel belgel
 ```
 PDF/Image ─→ Ingestion ─→ Structure ─→ Chunking ─→ Indexing ─→ Retrieval ─→ Generation
               (PyMuPDF     (Heading      (Parent/     (Chroma +   (Query      (Gemini +
-               + OCR)       Detection     Child)      BM25 +      Routing +    Guardrails)
-                            + Tree)                   RRF)        Section
-                                                                  Fetch)
+               + OCR        Detection     Child)      BM25 +      Routing +    Guardrails)
+               + (opt)      + Tree)                   RRF)        Section
+               VLM)                                                  Fetch)
 ```
 
 ### Temel Ozellikler
@@ -29,6 +31,9 @@ PDF/Image ─→ Ingestion ─→ Structure ─→ Chunking ─→ Indexing ─�
 | **Citation** | Her bilgi cumlesine [DosyaAdi - Sayfa X] referansi |
 | **Coklu Belge + Izolasyon** | Tek session'da birden fazla belge; retrieval doc_id ile izole edilir (cross-doc contamination onlenir) |
 | **Aktif Belge** | Birden fazla belge yuklendiginde `/use <dosya>` ile hedef belge secilir (varsayilan: son yuklenen) |
+| **Incremental Indexing** | Yeni belge eklendiginde sadece yeni chunk'lar embed edilir; onceki belgeler tekrar islenmez |
+| **LLM-Free Extractive QA** | `LLM_PROVIDER=none` ile LLM olmadan belgeden dogrudan alinti bazli cevap (embedding + retrieval yeterli) |
+| **Observability** | Index build, retrieval ve generation sureleri event log'a kaydedilir (`RAG_LOG=1`) |
 
 ## Kurulum (Windows)
 
@@ -44,10 +49,15 @@ pip install -r requirements.txt
 
 Bu projede GPU, **sadece embedding** (SentenceTransformers) tarafinda etkilidir. Gemini LLM/VLM API oldugu icin GPU ile hizlanmaz.
 
+- Varsayilan davranis:
+  - CUDA varsa embedding otomatik **GPU**'da calisir
+  - `EMBEDDING_MODEL=auto` iken CUDA varsa **multilingual-e5-base**, CUDA yoksa **multilingual-e5-small** secilir
+  - Override icin `.env`: `EMBEDDING_DEVICE=auto|cpu|cuda` ve/veya `EMBEDDING_MODEL=<model>`
+
 - GPU’yu dogrulama (runtime):
 
 ```bash
-python -c "from src.core.embedding import Embedder; e=Embedder('intfloat/multilingual-e5-small'); e.embed_query('test'); print('device:', e._model.device)"
+python -c "from src.config import load_settings; s=load_settings(); print('embedding_model', s.embedding_model); print('embedding_device', s.embedding_device); from src.core.embedding import Embedder; e=Embedder(s.embedding_model, device=s.embedding_device); e.embed_query('test'); print('device:', e._model.device)"
 ```
 
 ### 2) (Opsiyonel) OCR — Taranmis PDF ve Gorseller icin
@@ -100,6 +110,16 @@ GEMINI_MODEL=gemini-2.0-flash
 
 > Guvenlik: `GEMINI_API_KEY` degerini repo'ya commit etmeyin. Sadece lokal `.env`'de tutun.
 
+#### (Opsiyonel) LLM'siz Calistirma (Extractive Mod)
+
+LLM API anahtari olmadan da sistemi kullanabilirsiniz. Bu modda cevaplar belgeden dogrudan alinti olarak dondurulur:
+
+```ini
+LLM_PROVIDER=none
+```
+
+> Bu modda sohbet (`/chat`) desteklenmez; sadece belge sorusu + extractive cevap uretilir.
+
 ### 3.1) (Opsiyonel) VLM Ayarlari (Layout/Tablo icin)
 
 Karmasik PDF layout'lari (tablo, cok kolon, CV vb.) icin sistem sayfa goruntusunden **extract-only**
@@ -149,6 +169,24 @@ kontrol etmek icin:
 
 ```bash
 python scripts/baseline_gate.py
+```
+
+### Retrieval kalite metrikleri (LLM-free)
+
+25 soruluk eval set uzerinde intent accuracy, section hit, evidence recall olcumu:
+
+```bash
+python scripts/eval_retrieval.py --pdf Case_Study_20260205.pdf
+```
+
+Ornek cikti:
+
+```
+intent_accuracy : 92.0%
+section_hit    : 0.840
+heading_hit    : 0.760
+evidence_met   : 0.880
+avg_latency    : 1.2s
 ```
 
 ### (Opsiyonel) Test klasoru + loglama (onerilen)
@@ -219,11 +257,11 @@ Loglar JSONL formatinda yazilir:
 │       ├── embedding.py        # SentenceTransformer wrapper
 │       ├── eventlog.py         # (Opsiyonel) JSONL event logging (env ile acilir)
 │       ├── vectorstore.py      # ChromaDB persistent store
-│       ├── sparse.py           # BM25 sparse index
+│       ├── sparse.py           # BM25 sparse index (kalici, disk'e kaydedilir)
 │       ├── hybrid.py           # RRF fusion
 │       ├── indexing.py         # LocalIndex (Chroma + BM25)
 │       ├── retrieval.py        # Query routing + section fetch + coverage
-│       ├── generation.py       # Gemini LLM + guardrails + citation
+│       ├── generation.py       # Gemini LLM + guardrails + citation + extractive QA
 │       └── pipeline.py         # RAGPipeline (tum adimlari birlestirir)
 ├── scripts/
 │   ├── extract_text.py         # CLI: metin cikarma testi
@@ -232,13 +270,18 @@ Loglar JSONL formatinda yazilir:
 │   ├── search_index.py         # CLI: hybrid search testi
 │   ├── baseline_gate.py        # LLM-free core RAG gate (sentetik PDF)
 │   ├── lang_gate.py            # LLM-free dil secimi gate
+│   ├── eval_retrieval.py       # LLM-free retrieval kalite metrikleri
 │   ├── folder_suite.py         # Klasordeki PDF'leri toplu test + opsiyonel log
 │   ├── smoke_suite.py          # Multi-doc izolasyon smoke testleri
 │   ├── eval_case_study.py      # Case Study kabul kapisi (Gemini gerekir)
 │   ├── test_retrieval.py       # CLI: retrieval pipeline testi
 │   └── test_generation.py      # CLI: uctan uca generation testi
+├── test_data/
+│   └── eval_questions.json     # 25 soruluk retrieval eval seti
+├── .github/
+│   └── workflows/ci.yml        # GitHub Actions CI (baseline + opsiyonel Gemini eval)
 └── data/
-    └── chroma/                 # ChromaDB kalici depolama
+    └── chroma/                 # ChromaDB + BM25 kalici depolama
 ```
 
 ## Tasarim Kararlari
@@ -258,8 +301,25 @@ Loglar JSONL formatinda yazilir:
 5. **Neden Strict System Prompt?**
    Halusinasyonu onlemek icin LLM'e "SADECE baglamdaki bilgiyi kullan" ve "yoksa 'bulunamadi' de" kurallari zorunlu tutulur.
 
+6. **Neden Incremental Indexing?**
+   Yeni belge eklendiginde tum mevcut chunk'lari tekrar embed etmek O(n) maliyetlidir. Incremental upsert ile sadece yeni chunk'lar islenir.
+
+7. **Neden Extractive QA?**
+   LLM erisimi olmayan ortamlarda (offline/on-prem) da belge sorusu sorulabilsin diye, retrieval sonuclarini dogrudan alinti olarak donduren LLM-free mod eklendi.
+
 ## Notlar
 
 - Vector store olarak **ChromaDB** kullanilmaktadir (MVP icin en hizli kurulum).
+- Sparse index: **BM25** (rank-bm25), her build/extend sonrasi `data/chroma/bm25_index.pkl` olarak diske kaydedilir.
 - Embedding modeli: `intfloat/multilingual-e5-small` (TR/EN multilingual, hafif).
 - LLM: **Gemini 2.0 Flash** (varsayilan, `.env`'den degistirilebilir).
+- `LLM_PROVIDER=none` ile LLM olmadan extractive QA modunda calisir.
+- CI: `.github/workflows/ci.yml` her push'ta `baseline_gate` + `lang_gate` calistirir.
+
+## Gelecek Plan (Roadmap)
+
+| Ozellik | Durum | Aciklama |
+|---------|-------|----------|
+| **Reranker (Cross-Encoder)** | Planli | Hybrid top-k sonrasi cross-encoder ile yeniden siralama. Benzer baslikli bolumlerde "yakin ama yanlis" eslesmesini azaltir. Trade-off: +200-500ms latency, ~400MB ek model. Degerlendirme asamasinda. |
+| **Local LLM Provider** | Planli | `LLM_PROVIDER=local` ile llama.cpp/vLLM uzerinden tam offline QA. Mimari hazir (`llm_provider` field mevcut), model entegrasyonu bekliyor. |
+| **PII Redaction / Audit** | Gelecek | Savunma sanayii senaryolari icin PII maskeleme, kullanici bazli erisim kontrolu ve audit trail. |

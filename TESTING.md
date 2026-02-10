@@ -31,6 +31,16 @@ python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 python scripts/lang_gate.py
 ```
 
+### 0.35 Retrieval kalite metrikleri (LLM-free)
+
+25 soruluk eval set (`test_data/eval_questions.json`) uzerinde intent accuracy, section hit, evidence recall olcumu:
+
+```bash
+python scripts/eval_retrieval.py --pdf Case_Study_20260205.pdf
+```
+
+Metrikler: `intent_accuracy`, `section_hit`, `heading_hit`, `evidence_met`, `avg_latency`
+
 ### 0.4 Klasor suite (coklu PDF)
 
 `test_data/` klasorune birden fazla PDF koyup tek komutla retrieval / ask testi:
@@ -43,6 +53,13 @@ python scripts/folder_suite.py --dir test_data --mode ask --isolate 1 --max_pdfs
 # Tum PDF'leri tek session'da yuklemek isterseniz:
 python scripts/folder_suite.py --dir test_data --mode retrieval --isolate 0
 ```
+
+### 0.5 CI / GitHub Actions
+
+Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
+
+- **LLM-free job**: `baseline_gate.py` + `lang_gate.py` (her push)
+- **Gemini job (opsiyonel)**: `GEMINI_API_KEY` secret tanimlanmissa `eval_case_study.py` calistirilir
 
 ---
 
@@ -156,6 +173,29 @@ python scripts/folder_suite.py --dir test_data --mode retrieval --isolate 0
 | Cok buyuk PDF | 50+ sayfa | Tum sayfalar islenir | BEKLIYOR |
 | Taranmis PDF | Image-only (scan-like) PDF | OCR yoksa uyari + bos sonuc; OCR varsa metin cikarilir | PASSED (baseline_gate: graceful) / BEKLIYOR (OCR kalite) |
 | Karisik dil | TR+EN icerik | Her iki dilde de dogru arama | PASSED (baseline_gate) |
+
+---
+
+## 6. Yeni Ozellik Testleri
+
+### 6.1 Incremental Indexing
+| Test | Senaryo | Beklenen | Sonuc |
+|------|---------|----------|-------|
+| Ikinci dosya ekleme | Zaten 1 dosya yuklu iken 2. dosya ekle | Sadece yeni chunk'lar embed edilir; onceki indeks korunur | PASSED (baseline_gate: indexed docs=2) |
+| Index tutarliligi | Incremental sonrasi retrieval | Her iki belgeden de sonuc donebilir | PASSED (baseline_gate: multi-doc) |
+
+### 6.2 Extractive QA (LLM_PROVIDER=none)
+| Test | Senaryo | Beklenen | Sonuc |
+|------|---------|----------|-------|
+| LLM olmadan cevap | `LLM_PROVIDER=none` ile belge sorusu | Belgeden dogrudan alinti + citation | PASSED (unit) |
+| section_list extractive | Liste sorusu (LLM yok) | Deterministik section list donmesi | PASSED (paylasilan deterministic path) |
+| Bos evidence | Belge yuklu ama evidence bulunamadi | "Belgede bu bilgi bulunamadı." | PASSED |
+
+### 6.3 Observability / Telemetry
+| Test | Senaryo | Beklenen | Sonuc |
+|------|---------|----------|-------|
+| Index timing | Belge yukleme + `RAG_LOG=1` | Log'da `index_time_ms` alani var | PASSED |
+| Retrieval timing | Soru sorma + `RAG_LOG=1` | Log'da `retrieval_ms`, `generation_ms` alanlari var | PASSED |
 
 ---
 

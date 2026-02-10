@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
@@ -78,4 +79,50 @@ class BM25Index:
             if len(out) >= top_k:
                 break
         return out
+
+    def extend(self, new_chunks: List[Chunk]) -> "BM25Index":
+        """
+        Add new chunks to the index.  rank-bm25 does not support incremental
+        updates, so we rebuild the BM25 object from the combined token lists.
+        This is still much cheaper than re-embedding because tokenization is
+        CPU-only and fast.
+        """
+        new_children = [c for c in new_chunks if c.kind == "child"]
+        if not new_children:
+            return self
+
+        new_ids = [c.chunk_id for c in new_children]
+        new_toks = [simple_tokenize(c.text) for c in new_children]
+
+        # Extend internal state
+        combined_ids = self.ids + new_ids
+        combined_toks = [self.tokens_by_id[cid] for cid in self.ids] + new_toks
+        combined_map = dict(zip(combined_ids, combined_toks))
+
+        # Rebuild BM25 from combined tokens
+        bm25 = BM25Okapi(combined_toks) if combined_toks else self.bm25
+
+        self.ids = combined_ids
+        self.tokens_by_id = combined_map
+        self.bm25 = bm25
+        return self
+
+    # ── Persistence ──────────────────────────────────────────────
+    def save(self, path: str) -> None:
+        """Persist BM25 state to disk (tokens + ids only; BM25Okapi is rebuilt on load)."""
+        from pathlib import Path as _P
+        _P(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump({"tokens_by_id": self.tokens_by_id, "ids": self.ids}, f)
+
+    @classmethod
+    def load(cls, path: str) -> "BM25Index":
+        """Load BM25 state from disk and rebuild BM25Okapi."""
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        tokens_by_id: Dict[str, List[str]] = data["tokens_by_id"]
+        ids: List[str] = data["ids"]
+        corpus = [tokens_by_id[cid] for cid in ids]
+        bm25 = BM25Okapi(corpus) if corpus else BM25Okapi([])
+        return cls(tokens_by_id=tokens_by_id, bm25=bm25, ids=ids)
 

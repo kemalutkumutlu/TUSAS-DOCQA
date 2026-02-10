@@ -10,6 +10,7 @@ import os
 
 LLMProvider = Literal["none", "openai", "gemini"]
 VLMMode = Literal["off", "auto", "force"]
+EmbeddingDevice = Literal["auto", "cpu", "cuda"]
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class Settings:
     gemini_model: str
 
     embedding_model: str
+    embedding_device: EmbeddingDevice
 
     data_dir: Path
     chroma_dir: Path
@@ -36,6 +38,14 @@ class Settings:
 def load_settings() -> Settings:
     # Load .env if present (dev-friendly)
     load_dotenv(override=False)
+
+    def _cuda_available() -> bool:
+        try:
+            import torch  # noqa: WPS433
+
+            return bool(torch.cuda.is_available())
+        except Exception:
+            return False
 
     llm_provider: LLMProvider = os.getenv("LLM_PROVIDER", "none").strip().lower()  # type: ignore
     if llm_provider not in ("none", "openai", "gemini"):
@@ -60,13 +70,33 @@ def load_settings() -> Settings:
     # Safety clamp (avoid accidental huge costs)
     vlm_max_pages = max(0, min(200, vlm_max_pages))
 
+    embedding_device_raw = (os.getenv("EMBEDDING_DEVICE", "auto") or "auto").strip().lower()
+    embedding_device: EmbeddingDevice = (
+        embedding_device_raw  # type: ignore[assignment]
+        if embedding_device_raw in ("auto", "cpu", "cuda")
+        else "auto"
+    )
+
+    # Embedding model selection:
+    # - If EMBEDDING_MODEL is explicitly set to a model name, use it.
+    # - If EMBEDDING_MODEL is missing or set to "auto", choose:
+    #     - CUDA available (and not forced cpu) -> multilingual-e5-base
+    #     - otherwise -> multilingual-e5-small
+    embedding_model_raw = (os.getenv("EMBEDDING_MODEL", "auto") or "auto").strip()
+    if embedding_model_raw.lower() == "auto":
+        cuda_ok = _cuda_available() and embedding_device != "cpu"
+        embedding_model = "intfloat/multilingual-e5-base" if cuda_ok else "intfloat/multilingual-e5-small"
+    else:
+        embedding_model = embedding_model_raw
+
     return Settings(
         llm_provider=llm_provider,
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-small"),
+        embedding_model=embedding_model,
+        embedding_device=embedding_device,
         data_dir=data_dir,
         chroma_dir=chroma_dir,
         tesseract_cmd=tesseract_cmd,

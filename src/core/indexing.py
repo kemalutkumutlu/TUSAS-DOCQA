@@ -24,6 +24,14 @@ class LocalIndex:
     store: ChromaStore
     bm25: BM25Index
     allowed_doc_ids: Set[str]
+    chroma_dir: Optional[str] = None  # used to derive BM25 persist path
+
+    @property
+    def bm25_path(self) -> Optional[str]:
+        """Path where BM25 index is persisted (alongside ChromaDB)."""
+        if self.chroma_dir:
+            return str(Path(self.chroma_dir) / "bm25_index.pkl")
+        return None
 
     @classmethod
     def build(
@@ -31,9 +39,10 @@ class LocalIndex:
         chunks: List[Chunk],
         chroma_dir: Path,
         embedding_model: str,
+        embedding_device: str = "auto",
         collection_name: str = "chunks",
     ) -> "LocalIndex":
-        embedder = Embedder(model_name=embedding_model)
+        embedder = Embedder(model_name=embedding_model, device=embedding_device)  # type: ignore[arg-type]
         store = ChromaStore(persist_dir=str(chroma_dir), collection_name=collection_name)
 
         # Prevent stale chunks accumulating for the same doc_id(s) in the persistent store.
@@ -50,7 +59,48 @@ class LocalIndex:
 
         bm25 = BM25Index.build(chunks)
         allowed_doc_ids = {c.doc_id for c in chunks}
-        return cls(embedder=embedder, store=store, bm25=bm25, allowed_doc_ids=allowed_doc_ids)
+        idx = cls(
+            embedder=embedder, store=store, bm25=bm25,
+            allowed_doc_ids=allowed_doc_ids, chroma_dir=str(chroma_dir),
+        )
+        # Persist BM25 alongside ChromaDB
+        if idx.bm25_path:
+            bm25.save(idx.bm25_path)
+        return idx
+
+    def add_chunks(self, new_chunks: List[Chunk]) -> None:
+        """
+        Incrementally add chunks from a new document WITHOUT re-embedding
+        previously indexed chunks.  Only the new chunks are embedded and
+        upserted into Chroma; BM25 is extended (cheap CPU-only rebuild).
+
+        This turns multi-document indexing from O(N_total) embeddings per
+        add_document call to O(N_new) embeddings.
+        """
+        if not new_chunks:
+            return
+
+        # Clean stale chunks for the new doc_id(s) in Chroma.
+        new_doc_ids = sorted({c.doc_id for c in new_chunks})
+        if new_doc_ids:
+            if len(new_doc_ids) == 1:
+                self.store.delete_where(where={"doc_id": new_doc_ids[0]})
+            else:
+                self.store.delete_where(where={"$or": [{"doc_id": did} for did in new_doc_ids]})
+
+        # Embed only the NEW chunks.
+        embeddings = self.embedder.embed_texts([c.text for c in new_chunks])
+        self.store.upsert_chunks(new_chunks, embeddings=embeddings)
+
+        # Extend BM25 incrementally.
+        self.bm25.extend(new_chunks)
+
+        # Track new doc_ids.
+        self.allowed_doc_ids.update(new_doc_ids)
+
+        # Persist updated BM25
+        if self.bm25_path:
+            self.bm25.save(self.bm25_path)
 
     def _where_allowed_docs(self) -> Optional[dict]:
         """

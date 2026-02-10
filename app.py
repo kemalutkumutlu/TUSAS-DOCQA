@@ -209,6 +209,7 @@ def _get_pipeline() -> RAGPipeline:
                 tesseract_cmd=settings.tesseract_cmd,
                 tessdata_prefix=settings.tessdata_prefix,
             ),
+            embedding_device=getattr(settings, "embedding_device", "auto"),
             vlm_config=VLMConfig(
                 api_key=settings.gemini_api_key,
                 model=settings.gemini_model,
@@ -217,6 +218,7 @@ def _get_pipeline() -> RAGPipeline:
                 mode=settings.vlm_mode,
                 max_pages=settings.vlm_max_pages,
             ),
+            llm_provider=settings.llm_provider,
         )
         cl.user_session.set("pipeline", pipeline)
     return pipeline
@@ -263,12 +265,14 @@ async def on_chat_start():
                 flush=True,
             )
 
-    if settings.llm_provider != "gemini" or not settings.gemini_api_key:
+    if settings.llm_provider == "none" or not settings.gemini_api_key:
+        # Extractive mode: no LLM needed, embedding + retrieval only.
         await cl.Message(
             content=(
-                "**Hata:** `.env` dosyasinda `LLM_PROVIDER=gemini` ve "
-                "`GEMINI_API_KEY` ayarlanmali.\n\n"
-                "Lutfen `.env` dosyasini duzenleyip uygulamayi yeniden baslatin."
+                "Belge Analiz Sistemi — **Extractive Mod** (LLM devre disi)\n\n"
+                "- Belge yukleyip soru sorabilirsiniz. Cevaplar dogrudan belgeden alinacaktir.\n"
+                "- LLM destegi icin `.env` dosyasinda `LLM_PROVIDER=gemini` ve `GEMINI_API_KEY` ayarlayin.\n"
+                "- Belge yuklemek icin PDF/PNG/JPG dosyasini surukleyip birakin.\n"
             )
         ).send()
         return

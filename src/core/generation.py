@@ -628,3 +628,77 @@ def generate_answer(
         intent=retrieval.intent,
         context_preview=context[:500],
     )
+
+
+# ── Local / extractive generation (LLM-free) ──────────────────────────────
+
+def generate_extractive_answer(
+    retrieval: RetrievalResult,
+    query: str,
+) -> GenerationResult:
+    """
+    Generate an answer WITHOUT any LLM call.
+
+    - section_list intent → deterministic rendering (same as the LLM path)
+    - normal_qa intent   → return top evidence snippets verbatim with citations
+
+    This allows the system to work when LLM_PROVIDER=none.
+    """
+    if not retrieval.evidences:
+        return GenerationResult(
+            answer="Belgede bu bilgi bulunamadı.",
+            citations_found=0,
+            coverage_expected=None,
+            coverage_actual=None,
+            coverage_ok=None,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    # Deterministic section list (shared with the LLM path).
+    deterministic = _render_deterministic_section_list(retrieval)
+    if deterministic:
+        citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", deterministic)) + len(
+            re.findall(r"\[[^\]]*?/\s*\d+\s*\]", deterministic)
+        )
+        expected = retrieval.coverage.expected_items if retrieval.coverage else None
+        actual = _count_answer_items(deterministic) if expected is not None else None
+        ok = (actual >= expected) if (expected is not None and actual is not None) else None
+        return GenerationResult(
+            answer=deterministic,
+            citations_found=citations_found,
+            coverage_expected=expected,
+            coverage_actual=actual,
+            coverage_ok=ok,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    # Extractive fallback: top evidence snippets with citations.
+    lines: list[str] = []
+    seen_pages: set[str] = set()
+    for ev in retrieval.evidences[:5]:  # top 5 evidence chunks
+        cite = f"[{ev.doc_name} - Sayfa {ev.page}]" if ev.page else f"[{ev.doc_name}]"
+        # Deduplicate same page content
+        key = f"{ev.doc_name}:{ev.page}:{ev.text[:80]}"
+        if key in seen_pages:
+            continue
+        seen_pages.add(key)
+
+        snippet = ev.text.strip()
+        if len(snippet) > 800:
+            snippet = snippet[:800] + "…"
+        lines.append(f"{snippet}\n{cite}")
+
+    answer = "\n\n---\n\n".join(lines)
+    citations_found = len(lines)
+
+    return GenerationResult(
+        answer=answer,
+        citations_found=citations_found,
+        coverage_expected=None,
+        coverage_actual=None,
+        coverage_ok=None,
+        intent=retrieval.intent,
+        context_preview="",
+    )

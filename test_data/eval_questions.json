@@ -1,0 +1,177 @@
+[
+  {
+    "query": "fonksiyonel gereksinimler nelerdir",
+    "expected_intent": "section_list",
+    "expected_section_key": "2",
+    "expected_heading_contains": "Fonksiyonel",
+    "min_evidence_count": 2
+  },
+  {
+    "query": "teslimatlar nelerdir",
+    "expected_intent": "section_list",
+    "expected_section_key": "4",
+    "expected_heading_contains": "Teslimat",
+    "min_evidence_count": 3
+  },
+  {
+    "query": "teslim süresi nedir",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": null,
+    "min_evidence_count": 1
+  },
+  {
+    "query": "projenin amacı nedir",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": "Proje",
+    "min_evidence_count": 1
+  },
+  {
+    "query": "belge yükleme nasıl çalışır",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": null,
+    "min_evidence_count": 1
+  },
+  {
+    "query": "metin çıkarımı hangi dilleri destekler",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": null,
+    "min_evidence_count": 1
+  },
+  {
+    "query": "DEVLOG.md nedir",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": "Teslimat",
+    "min_evidence_count": 1
+  },
+  {
+    "query": "TESTING.md ne içermeli",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": "Test",
+    "min_evidence_count": 1
+  },
+  {
+    "query": "demo video ne kadar sürmeli",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": null,
+    "min_evidence_count": 1
+  },
+  {
+    "query": "teknik yaklaşımda hangi kısıtlamalar var",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": "Teknik",
+    "min_evidence_count": 1
+  },
+  {
+    "query": "sisteminizi nasıl test ettiniz",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": "Test",
+    "min_evidence_count": 1
+  },
+  {
+    "query": "kullanıcı PDF ve resim yükleyebilmeli mi",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": "Fonksiyonel",
+    "min_evidence_count": 1
+  },
+  {
+    "query": "hallucination ne demek",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": null,
+    "min_evidence_count": 1
+  },
+  {
+    "query": "teslim yöntemi nedir",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": "Teslimat",
+    "min_evidence_count": 1
+  },
+  {
+    "query": "pozisyon bilgisi nedir",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": null,
+    "min_evidence_count": 1
+  },
+  {
+    "query": "beklenen çalışma süresi kaç saat",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": null,
+    "min_evidence_count": 1
+  },
+  {
+    "query": "what are the functional requirements",
+    "expected_intent": "section_list",
+    "expected_section_key": "2",
+    "expected_heading_contains": "Fonksiyonel",
+    "min_evidence_count": 2
+  },
+  {
+    "query": "list all deliverables",
+    "expected_intent": "section_list",
+    "expected_section_key": "4",
+    "expected_heading_contains": "Teslimat",
+    "min_evidence_count": 3
+  },
+  {
+    "query": "what is the project about",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": "Proje",
+    "min_evidence_count": 1
+  },
+  {
+    "query": "geliştirme süreci kaydı ne içermeli",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": "DEVLOG",
+    "min_evidence_count": 1
+  },
+  {
+    "query": "araba kaç beygir",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": null,
+    "min_evidence_count": 0
+  },
+  {
+    "query": "teknik mülakatta ne bekleniyor",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": null,
+    "min_evidence_count": 1
+  },
+  {
+    "query": "LLM araçları kullanmak serbest mi",
+    "expected_intent": "normal_qa",
+    "expected_section_key": null,
+    "expected_heading_contains": null,
+    "min_evidence_count": 1
+  },
+  {
+    "query": "fonksiyonel gereksinimlerin beklenen davranışları nelerdir",
+    "expected_intent": "section_list",
+    "expected_section_key": "2",
+    "expected_heading_contains": "Fonksiyonel",
+    "min_evidence_count": 2
+  },
+  {
+    "query": "teslimatların açıklamaları nelerdir",
+    "expected_intent": "section_list",
+    "expected_section_key": "4",
+    "expected_heading_contains": "Teslimat",
+    "min_evidence_count": 3
+  }
+]

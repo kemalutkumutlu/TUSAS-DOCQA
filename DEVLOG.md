@@ -141,6 +141,78 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
 - `scripts/baseline_gate.py`:
   - Bos/scan-like PDF’lerin crash etmemesi ve mixed-language retrieval icin ek kapilar eklendi.
 
+## Alternatif Degerlendirmeler ve Tasarim Kararlari
+
+Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimizi belgelemektedir.
+
+### Faz 1 — Ingestion Alternatifleri
+- **pdfplumber vs PyMuPDF**: pdfplumber tablo cikariminda daha iyi, ancak PyMuPDF hem daha hizli hem de sayfa gorseli (pixmap) destegiyle VLM pipeline'ina daha uygun. PyMuPDF secildi.
+- **EasyOCR vs Tesseract**: EasyOCR GPU ile hizli ve TR destegi iyi, ancak dependency boyutu cok buyuk (~1.5 GB). Tesseract hafif ve yaygin; `tur+eng` langpack ile yeterli. Tesseract secildi.
+- **VLM-only ingestion**: Tum sayfalari Gemini VLM ile isleme fikri dusunuldu. Sorunlar: maliyet (sayfa basi API call), latency, ve availability riski. Bunun yerine **dual-quality** yaklasimi secildi: VLM adayi da uretilir ama en iyi kalite otomatik secilir.
+
+### Faz 2 — Chunking Alternatifleri
+- **Naif fixed-size chunking vs Hierarchical**: Fixed-size daha basit ama "X nelerdir?" gibi sorularda alt maddeler kayboluyordu. Heading-based parent/child yapiyla tum bolum getirilmesi saglanip bu sorun tasarimsal olarak cozuldu.
+- **LLM-based heading detection**: Baslik tespiti icin LLM kullanma fikri vardi. Ancak regex-based deterministic tespit hem LLM maliyetinden kacinir hem de tekrar uretilabilir sonuc verir. Regex secildi.
+
+### Faz 3 — Retrieval Alternatifleri
+- **Sadece Dense vs Hybrid**: Sadece vector search, keyword-specific sorgularda basarisiz (orn. "DEVLOG.md" aramasi). BM25 eklenerek RRF fusion ile her iki avantaj birlestirildi.
+- **Pinecone/Weaviate vs ChromaDB**: Managed vector DB'ler production'da daha iyi, ancak MVP icin lokal persistence + sifir konfigrasyon avantaji ChromaDB'yi ideal kildi.
+- **FAISS vs ChromaDB**: FAISS daha performansli ama metadata filtreleme (doc_id, section_id) icin ek katman gerektirir. ChromaDB bunu native destekler.
+
+### Faz 4-5 — Generation Alternatifleri
+- **LLM-only section list vs Deterministic rendering**: LLM bazen madde atliyordu. Deterministic rendering ile LLM'e gitmeden parent chunk text'inden madde cikarimi yapilarak %100 coverage saglandi. LLM yolu sadece deterministic cikarilamadiginda fallback olarak kullaniliyor.
+- **OpenAI vs Gemini**: Her iki API de destekleniyor, ancak Gemini 2.0 Flash'in TR performansi, fiyat/performans orani ve multimodal yeteneginden dolayi varsayilan olarak Gemini secildi.
+
+## Zorluklar ve Cozumler
+
+| Zorluk | Etki | Cozum |
+|--------|------|-------|
+| Windows Unicode konsol hatasi | Script'ler crash | `sys.stdout.reconfigure(encoding="utf-8")` |
+| ChromaDB `$and` operatoru gerekliligi | Multi-field where calismiyor | `$and`/`$or` syntax'ine gecis |
+| PDF tablo cikarimi (non-standard layout) | Maddeler kayip | Indexed-table + label/desc pair extraction heuristic'leri |
+| Gemini 503/429 gecici hatalar | Eval script'ler fail | Exponential backoff retry (4 deneme) |
+| Port 8000 cakismasi (Windows) | Gelistirme akisi bozuluyor | `AUTO_EXIT_ON_NO_CLIENTS` opsiyonel hook |
+| VLM heading regresyonu | VLM force modunda heading kaybi | Dual-quality secim: PDF/OCR/VLM arasinda en iyi yapi secilir |
+
+## Zaman Dagilimi (Tahmini)
+
+| Faz | Tahmini Sure | Notlar |
+|-----|-------------|--------|
+| Faz 0 — Proje Iskeleti | ~1 saat | Chainlit + config + proje yapisi |
+| Faz 1 — Ingestion | ~4 saat | PDF parsing + OCR + VLM + dual-quality |
+| Faz 2 — Structure + Chunking | ~3 saat | Heading detection + section tree + parent-child |
+| Faz 3 — Indexing (Hybrid) | ~4 saat | ChromaDB + BM25 + RRF + multi-doc izolasyon |
+| Faz 4 — Query Routing + Coverage | ~4 saat | Intent classification + subtree fetch + coverage heuristic |
+| Faz 5 — Generation + Guardrails | ~5 saat | System prompt + deterministic section-list + retry |
+| Faz 6 — UI + Test Altyapisi | ~5 saat | Chainlit entegrasyon + baseline_gate + eval + loglama |
+| Debug / Edge Case / Dokumantasyon | ~4 saat | Windows sorunlari, kenar durumlari, README/TESTING |
+| **Toplam** | **~30 saat** | |
+
+## Bastan Baslasam Neyi Farkli Yapardim
+
+1. **Chunking stratejisini en basta karar verirdim.** Ilk versiyonda naif chunking deneyip sonra hierarchical'a gecmek zaman kaybetti. Section-tree yaklasiminin faydasini erkenden fark ederdim.
+
+2. **Eval set'i Faz 1'den itibaren olustururdum.** Kalite olcumu en sonda yapildi; erkenden 10-15 soru hazirlamak her degisikligin etkisini gorunur kilardi.
+
+3. **BM25 persistence'i baslatirdim.** In-memory BM25 her restart'ta rebuild oluyor. ChromaDB gibi persist eden bir BM25 wrapper'i MVP asamasinda eklemezdim ama mimaride ongorurddum.
+
+4. **VLM'i daha gec eklerdim.** VLM dual-quality secimi onemli bir ozellik ama MVP icin gerekliydi mi tartismali. OCR + PDF text-layer cogu senaryo icin yeterliydi; VLM'i "Faz 2" yerine "Faz 7 / opsiyonel" olarak konumlandirirdim.
+
+5. **Daha fazla unit test yazardim.** Mevcut test altyapisi (baseline_gate, eval_case_study) entegrasyon seviyesinde cok iyi, ancak birim testleri (orn. heading detection, coverage counting) ayri olsaydi refactoring'ler daha guvenli olurdu.
+
+## Teknik Borc ve Sinirlamalar
+
+- **BM25 in-memory**: Her restart'ta rebuild. Kucuk veri setlerinde sorun degil, buyuk dokumanlarda fark edilir.
+- **Tam rebuild indexing**: Yeni dokuman eklendiginde tum embedding'ler yeniden hesaplaniyor. Incremental upsert ihtiyaci var.
+- **LLM bagimliligi**: `normal_qa` intent'te LLM olmadan cevap verilemiyor. Extractive fallback eklenmeli.
+- **Tek embedding model**: Model degistiginde tum index rebuild gerekiyor. Model versiyonlama/migration mekanizmasi yok.
+- **OCR kalite siniri**: Dusuk cozunurluklu tarama PDF'lerde OCR kalitesi degisken. Post-processing (spell check / denoise) yok.
+
 ## Sonraki Adimlar
-- Uçtan uca testleri farkli PDF tipleriyle genislet (tarama PDF, tablo agirlikli, cok kolonlu)
+- Retrieval kalitesi icin mini eval set + metrikler
+- CI/CD pipeline (GitHub Actions)
+- Incremental indexing (doc basi)
+- LLM'siz extractive QA modu
+- Observability / telemetry
 - Demo video
+- Uctan uca testleri farkli PDF tipleriyle genislet

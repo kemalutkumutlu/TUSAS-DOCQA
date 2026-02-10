@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 from uuid import uuid4
 
-from .generation import GenerationResult, generate_answer, generate_chat_answer
+from .generation import GenerationResult, generate_answer, generate_chat_answer, generate_extractive_answer
 from .eventlog import JsonlEventLogger
 from .indexing import LocalIndex
 from .ingestion import OCRConfig, ingest_any, IngestResult
@@ -46,7 +47,9 @@ class RAGPipeline:
     gemini_api_key: str
     gemini_model: str
     ocr_config: OCRConfig
+    embedding_device: str = "auto"
     vlm_config: Optional[VLMConfig] = None
+    llm_provider: str = "gemini"  # "gemini" | "openai" | "none"
 
     # State
     _documents: Dict[str, DocumentState] = field(default_factory=dict)
@@ -93,7 +96,7 @@ class RAGPipeline:
         self._documents[ingest.doc_id] = state
         self._active_doc_id = ingest.doc_id
 
-        # Rebuild full chunk list and index
+        # Update full chunk list.
         self._all_chunks = []
         for doc_state in self._documents.values():
             self._all_chunks.extend(doc_state.chunks)
@@ -120,11 +123,19 @@ class RAGPipeline:
                 )
             return state
 
-        self._index = LocalIndex.build(
-            chunks=self._all_chunks,
-            chroma_dir=self.chroma_dir,
-            embedding_model=self.embedding_model,
-        )
+        # Incremental indexing: if an index already exists AND the new doc has
+        # chunks, add only the new doc's chunks (avoid re-embedding all previous).
+        _t0 = time.perf_counter()
+        if self._index is not None and chunks:
+            self._index.add_chunks(chunks)
+        else:
+            self._index = LocalIndex.build(
+                chunks=self._all_chunks,
+                chroma_dir=self.chroma_dir,
+                embedding_model=self.embedding_model,
+                embedding_device=self.embedding_device,
+            )
+        _index_ms = (time.perf_counter() - _t0) * 1000
 
         lg = self._get_logger()
         if lg:
@@ -136,6 +147,8 @@ class RAGPipeline:
                     "doc_id": state.doc_id,
                     "page_count": state.page_count,
                     "chunk_count": len(state.chunks),
+                    "index_time_ms": round(_index_ms, 1),
+                    "incremental": self._index is not None and len(self._documents) > 1,
                     "warnings": state.warnings,
                 },
             )
@@ -295,12 +308,15 @@ class RAGPipeline:
         if self._index is None:
             # No chunks indexed (empty/scanned doc without OCR, etc.). Return safe "not found".
             empty = RetrievalResult(intent=classify_query(query), evidences=[], section_complete=False, coverage=None)
-            result = generate_answer(
-                retrieval=empty,
-                query=query,
-                gemini_api_key=self.gemini_api_key,
-                gemini_model=self.gemini_model,
-            )
+            if self.llm_provider == "none":
+                result = generate_extractive_answer(retrieval=empty, query=query)
+            else:
+                result = generate_answer(
+                    retrieval=empty,
+                    query=query,
+                    gemini_api_key=self.gemini_api_key,
+                    gemini_model=self.gemini_model,
+                )
             lg = self._get_logger()
             if lg:
                 lg.log(
@@ -329,15 +345,22 @@ class RAGPipeline:
                 )
             return result
 
+        _t_ret = time.perf_counter()
         doc_hint = self._resolve_doc_id_hint(query)
         ret = retrieve(self._index, query, doc_id=doc_hint)
+        _retrieval_ms = (time.perf_counter() - _t_ret) * 1000
 
-        result = generate_answer(
-            retrieval=ret,
-            query=query,
-            gemini_api_key=self.gemini_api_key,
-            gemini_model=self.gemini_model,
-        )
+        _t_gen = time.perf_counter()
+        if self.llm_provider == "none":
+            result = generate_extractive_answer(retrieval=ret, query=query)
+        else:
+            result = generate_answer(
+                retrieval=ret,
+                query=query,
+                gemini_api_key=self.gemini_api_key,
+                gemini_model=self.gemini_model,
+            )
+        _gen_ms = (time.perf_counter() - _t_gen) * 1000
         lg = self._get_logger()
         if lg:
             lg.log(
@@ -357,6 +380,8 @@ class RAGPipeline:
                     "coverage_ok": result.coverage_ok,
                     "citations_found": result.citations_found,
                     "answer": result.answer,
+                    "retrieval_ms": round(_retrieval_ms, 1),
+                    "generation_ms": round(_gen_ms, 1),
                     **(
                         {"context_preview": result.context_preview}
                         if (lg.include_context_preview and result.context_preview)

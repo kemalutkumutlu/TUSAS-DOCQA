@@ -49,6 +49,18 @@ python -c "import torch; print('torch',torch.__version__); print('torch_cuda',to
 python -c "from src.core.embedding import Embedder; e=Embedder('intfloat/multilingual-e5-small'); e.embed_query('test'); print('device:', e._model.device)"
 ```
 
+## Opsiyonel: Embedding device secimi
+
+Varsayilan: `EMBEDDING_DEVICE=auto` (CUDA varsa GPU, yoksa CPU).
+
+`.env` icinde override edebilirsiniz:
+
+```ini
+EMBEDDING_DEVICE=auto
+# EMBEDDING_DEVICE=cpu
+# EMBEDDING_DEVICE=cuda
+```
+
 ## Troubleshooting
 
 - **CUDA True ama hizlanma yok**: embedding device kontrol komutuyla `device: cuda` gorundugunu teyit edin.
