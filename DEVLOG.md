@@ -118,6 +118,29 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
 - Gemini LLM/VLM API cagirilari uzak servis oldugu icin GPU ile hizlanmaz.
 - README'ye “GPU notu + runtime device dogrulama” komutu eklendi.
 
+## Faz 6.3 — Klasor Test Suite + JSONL Loglama (opsiyonel, bozmadan)
+- Amaç: Birden fazla PDF ile daha iyi saha testi ve “neden bu cevap geldi?” sorusuna kanitli debug.
+- `scripts/folder_suite.py` eklendi:
+  - `test_data/` altindaki PDF'leri toplu indeksler ve sorgulari koşturur.
+  - `--isolate 1` ile her PDF’i ayri indeksleyerek (coklu PDF’de) O(N^2) re-embedding riskini azaltir.
+  - `--max_pdfs N` ile hizli sanity check yapilabilir.
+- `src/core/eventlog.py` eklendi (JSONL event logger).
+- `src/core/pipeline.py` icine **env ile acilan** log entegrasyonu eklendi (default OFF):
+  - `RAG_LOG=1` olursa her `ask()` icin `query/answer/intent/evidence_count/citation/coverage` bilgileri loglanir.
+  - Loglar: `data/logs/rag_<YYYYMMDD>_session_<id>.jsonl` ve `data/logs/by_doc/<dosya>.jsonl`
+  - Gizlilik: `RAG_LOG_CONTEXT_PREVIEW=0` default (baglam preview kapali).
+- Dokumantasyon guncellendi: `.env.example`, `README.md`, `TESTING.md`.
+
+## Faz 6.4 — Dayaniklilik: PDF kalitesi dusuk text-layer + izolasyon kenar durumlari
+- `src/core/ingestion.py`:
+  - OCR tetikleyicisi iyilestirildi: sadece “metin cok kisa” degil, **low-quality text-layer** durumunda da OCR/VLM adayi olur.
+- `src/core/indexing.py`:
+  - Doc filter kenar durumu: Caller doc_ids verip filtre bos kalirsa **unrestricted search'e dusmez**, bos sonuc doner (cross-doc leak riski azalir).
+- `src/core/generation.py`:
+  - TR/EN dil secimi icin hafif heuristik + sistem prompt addendum eklendi (LLM-free gate ile dogrulandi).
+- `scripts/baseline_gate.py`:
+  - Bos/scan-like PDF’lerin crash etmemesi ve mixed-language retrieval icin ek kapilar eklendi.
+
 ## Sonraki Adimlar
 - Uçtan uca testleri farkli PDF tipleriyle genislet (tarama PDF, tablo agirlikli, cok kolonlu)
 - Demo video

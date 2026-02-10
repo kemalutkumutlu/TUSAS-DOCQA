@@ -36,8 +36,12 @@ python scripts/lang_gate.py
 `test_data/` klasorune birden fazla PDF koyup tek komutla retrieval / ask testi:
 
 ```bash
-python scripts/folder_suite.py --dir test_data --mode retrieval
-python scripts/folder_suite.py --dir test_data --mode ask
+# Tavsiye: isolate mode (her PDF ayri indekslenir)
+python scripts/folder_suite.py --dir test_data --mode retrieval --isolate 1 --max_pdfs 1
+python scripts/folder_suite.py --dir test_data --mode ask --isolate 1 --max_pdfs 1
+
+# Tum PDF'leri tek session'da yuklemek isterseniz:
+python scripts/folder_suite.py --dir test_data --mode retrieval --isolate 0
 ```
 
 ---

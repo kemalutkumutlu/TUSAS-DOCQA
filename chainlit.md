@@ -5,6 +5,8 @@ PDF ve gorsel (JPG, PNG) belgelerinizi yukleyin, ardindan Turkce veya Ingilizce 
 ## Ozellikler
 
 - PDF metin katmani + OCR (taranmis belgeler icin)
+- (Opsiyonel) VLM (Gemini multimodal) ile **extract-only** metin cikarimi (tablo / cok kolonlu sayfalar icin)
+- Dual-quality secim: PDF/OCR/VLM adaylari arasindan baslik/structure korunumu daha iyi olani secilir
 - Hiyerarsik bolum algilama ve eksiksiz bolum getirme
 - Hibrit arama (vektor + BM25) ile yuksek isaretlilik
 - Halusinasyon onleme: sadece belgeden gelen bilgi, kaynak referanslariyla
@@ -23,3 +25,4 @@ PDF ve gorsel (JPG, PNG) belgelerinizi yukleyin, ardindan Turkce veya Ingilizce 
 
 - Doc modda belge yoksa, belge sorulari icin once belge yuklemeniz istenir.
 - Birden fazla belge yuklediyseniz, soru hedefini netlestirmek icin `/use <dosya>` kullanin.
+- (Opsiyonel) Loglama: Soru/cevaplari JSONL olarak kaydetmek icin `.env` icinde `RAG_LOG=1` yapabilirsiniz (detay: `README.md`).

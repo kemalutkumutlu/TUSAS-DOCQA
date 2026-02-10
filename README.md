@@ -156,13 +156,13 @@ python scripts/baseline_gate.py
 Birden fazla PDF ile hizli denemek icin `test_data/` altina PDF’leri koyup:
 
 ```bash
-python scripts/folder_suite.py --dir test_data --mode retrieval
+python scripts/folder_suite.py --dir test_data --mode retrieval --isolate 1 --max_pdfs 1
 ```
 
 LLM cevaplari + soru/cevap loglari icin (Gemini gerekir):
 
 ```bash
-python scripts/folder_suite.py --dir test_data --mode ask
+python scripts/folder_suite.py --dir test_data --mode ask --isolate 1 --max_pdfs 1
 ```
 
 Soru/cevap loglarini acmak icin `.env` icine:
@@ -175,6 +175,9 @@ RAG_LOG_DIR=./data/logs
 Loglar JSONL formatinda yazilir:
 - `data/logs/rag_<YYYYMMDD>_session_<id>.jsonl`
 - `data/logs/by_doc/<dosya>.jsonl`
+
+> Not: `--isolate 1` her PDF’i ayri indeksledigi icin (coklu PDF’de) daha hizli ve daha “deterministik” test verir.
+> Ilk calistirmada embedding modeli indirilecegi icin sure uzayabilir.
 
 ### Troubleshooting (Windows)
 
@@ -214,6 +217,7 @@ Loglar JSONL formatinda yazilir:
 │       ├── ingestion.py        # PDF/image okuma + OCR
 │       ├── structure.py        # Heading detection + section tree + chunking
 │       ├── embedding.py        # SentenceTransformer wrapper
+│       ├── eventlog.py         # (Opsiyonel) JSONL event logging (env ile acilir)
 │       ├── vectorstore.py      # ChromaDB persistent store
 │       ├── sparse.py           # BM25 sparse index
 │       ├── hybrid.py           # RRF fusion
@@ -227,6 +231,8 @@ Loglar JSONL formatinda yazilir:
 │   ├── build_index.py          # CLI: index olusturma
 │   ├── search_index.py         # CLI: hybrid search testi
 │   ├── baseline_gate.py        # LLM-free core RAG gate (sentetik PDF)
+│   ├── lang_gate.py            # LLM-free dil secimi gate
+│   ├── folder_suite.py         # Klasordeki PDF'leri toplu test + opsiyonel log
 │   ├── smoke_suite.py          # Multi-doc izolasyon smoke testleri
 │   ├── eval_case_study.py      # Case Study kabul kapisi (Gemini gerekir)
 │   ├── test_retrieval.py       # CLI: retrieval pipeline testi

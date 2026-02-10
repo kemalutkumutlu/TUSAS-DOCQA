@@ -10,6 +10,11 @@ data/
 # PDFs / large local test assets
 *.pdf
 
+# Allow committing curated PDF fixtures under test_data/
+!test_data/
+!test_data/**
+!test_data/**/*.pdf
+
 # OS / editor
 .DS_Store
 Thumbs.db
