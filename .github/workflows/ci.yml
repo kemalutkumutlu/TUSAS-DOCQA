@@ -34,7 +34,8 @@ jobs:
   eval:
     name: Case Study Eval (Gemini)
     runs-on: ubuntu-latest
-    if: ${{ vars.GEMINI_API_KEY != '' || secrets.GEMINI_API_KEY != '' }}
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || vars.GEMINI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -43,12 +44,14 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: ${{ env.GEMINI_API_KEY != '' }}
         run: pip install -r requirements.txt
 
       - name: Case Study acceptance eval
+        if: ${{ env.GEMINI_API_KEY != '' }}
         run: python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
         env:
           LLM_PROVIDER: gemini
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ env.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-2.0-flash
           VLM_MODE: force
