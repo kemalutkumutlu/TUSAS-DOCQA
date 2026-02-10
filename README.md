@@ -1,4 +1,4 @@
-# TUSAS LLM Case Study — Belge Analiz ve Soru-Cevap Sistemi
+# TUSAS DOCQA — Belge Analiz ve Soru-Cevap Sistemi
 
 [![CI](https://github.com/kemalutkumutlu/TUSAS-DOCQA/actions/workflows/ci.yml/badge.svg)](https://github.com/kemalutkumutlu/TUSAS-DOCQA/actions/workflows/ci.yml)
 
