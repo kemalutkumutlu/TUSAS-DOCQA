@@ -191,15 +191,32 @@ python scripts/baseline_gate.py
 python scripts/eval_retrieval.py --pdf Case_Study_20260205.pdf
 ```
 
-Ornek cikti:
+Son calistirma sonuclari (2026-02-11):
 
 ```
-intent_accuracy : 92.0%
-section_hit    : 0.840
-heading_hit    : 0.760
-evidence_met   : 0.880
-avg_latency    : 1.2s
+Intent Accuracy : 25/25 (100%)
+Heading Hit     : 14/15 (93%)
+Section Hit     : 5/6  (83%)
+Evidence Met    : 24/25 (96%)
+Avg Latency     : 29 ms
 ```
+
+### Halusinasyon Testi (Gemini gerekir)
+
+25 soruluk (10 pozitif + 15 negatif) kapsamli halusinasyon ve sadakat testi:
+
+```bash
+python scripts/hallucination_test.py --pdf test_data/Case_Study_20260205.pdf
+```
+
+Son calistirma sonuclari (2026-02-11):
+
+| Metrik | Deger |
+|--------|-------|
+| Pozitif dogru yanit | 10/10 (100%) |
+| Negatif dogru red | 14/15 (93%) |
+| Halusinasyon orani | 1/15 (7%) |
+| Citation uyumu | 10/10 (100%) |
 
 ### (Opsiyonel) Test klasoru + loglama (onerilen)
 
@@ -289,6 +306,7 @@ Loglar JSONL formatinda yazilir:
 │   ├── folder_suite.py         # Klasordeki PDF'leri toplu test + opsiyonel log
 │   ├── smoke_suite.py          # Multi-doc izolasyon smoke testleri
 │   ├── eval_case_study.py      # Case Study kabul kapisi (Gemini gerekir)
+│   ├── hallucination_test.py   # Halusinasyon & sadakat testi (25 soru, Gemini gerekir)
 │   ├── test_retrieval.py       # CLI: retrieval pipeline testi
 │   └── test_generation.py      # CLI: uctan uca generation testi
 ├── test_data/

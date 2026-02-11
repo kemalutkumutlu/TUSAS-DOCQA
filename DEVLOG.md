@@ -244,12 +244,40 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - **Tek embedding model**: Model degistiginde tum index rebuild gerekiyor. Model versiyonlama/migration mekanizmasi yok.
 - **OCR kalite siniri**: Dusuk cozunurluklu tarama PDF'lerde OCR kalitesi degisken. Post-processing (spell check / denoise) yok.
 
+## Faz 8 — Kapsamli Test Kosusu ve Halusinasyon Testi (2026-02-11)
+
+### 8.1 — Halusinasyon Test Scripti
+- `scripts/hallucination_test.py` eklendi:
+  - 10 pozitif (belgede var) + 15 negatif (belgede yok) soruluk kapsamli test
+  - Olcumlenen metrikler: halusinasyon orani, yanlis negatif orani, citation uyumu, anahtar kelime isabeti, gecikme
+  - Sonuc: Pozitif 10/10 (100%), Negatif 14/15 (93%), Citation 100%
+  - 1 edge case: "sunucu gereksinimleri nelerdir" → keyword overlap nedeniyle "Fonksiyonel Gereksinimler" bolumuyle eslesti (retrieval false-positive, LLM kaynakli degil)
+
+### 8.2 — 8 PDF ile Tam Kosu
+- `test_data/` altindaki 8 farkli PDF (TR/EN, akademik/teknik/CV/brosur) ile folder_suite calistirildi
+- Retrieval: 32/32 basarili (8 PDF x 4 sorgu)
+- Ask (Gemini): 12/12 basarili (3 PDF x 4 sorgu)
+- Toplam: 118 sayfa, 192 chunk basariyla indekslendi
+
+### 8.3 — Sayisal Retrieval Metrikleri
+- 25 soruluk eval set (Case Study):
+  - Intent Accuracy: 100% (25/25)
+  - Heading Hit: 93% (14/15)
+  - Section Hit: 83% (5/6)
+  - Evidence Met: 96% (24/25)
+  - Avg Retrieval Latency: 29 ms
+
+### 8.4 — Dokumantasyon Guncellemesi
+- `TESTING.md`: Tum sayisal sonuclar, halusinasyon detay tablosu, coklu belge tipi performans tablosu, metrik ozeti eklendi
+- `DEVLOG.md`: Faz 8 eklendi
+
 ## Sonraki Adimlar
-- ~~Retrieval kalitesi icin mini eval set + metrikler~~ → TAMAM (Faz 7.2)
-- ~~CI/CD pipeline (GitHub Actions)~~ → TAMAM (Faz 7.1)
-- ~~Incremental indexing (doc basi)~~ → TAMAM (Faz 7.3)
-- ~~LLM'siz extractive QA modu~~ → TAMAM (Faz 7.5)
-- ~~Observability / telemetry~~ → TAMAM (Faz 7.6)
+- ~~Retrieval kalitesi icin mini eval set + metrikler~~ -> TAMAM (Faz 7.2)
+- ~~CI/CD pipeline (GitHub Actions)~~ -> TAMAM (Faz 7.1)
+- ~~Incremental indexing (doc basi)~~ -> TAMAM (Faz 7.3)
+- ~~LLM'siz extractive QA modu~~ -> TAMAM (Faz 7.5)
+- ~~Observability / telemetry~~ -> TAMAM (Faz 7.6)
+- ~~Uctan uca testleri farkli PDF tipleriyle genislet~~ -> TAMAM (Faz 8.2: 8 PDF, 118 sayfa)
+- ~~Halusinasyon testi~~ -> TAMAM (Faz 8.1: 25 soru, %93 basari)
 - Demo video
-- Uctan uca testleri farkli PDF tipleriyle genislet
 - Reranker (cross-encoder) degerlendirmesi (Roadmap'te)

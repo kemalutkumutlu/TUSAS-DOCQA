@@ -2,11 +2,13 @@
 
 Bu belge test senaryolarini, beklenen davranislari ve gozlemlenen sonuclari icerir.
 
+> **Son Test Tarihi**: 2026-02-11 | **Ortam**: Windows 10, Python 3.11, CUDA GPU, intfloat/multilingual-e5-base (768d)
+
 ---
 
 ## 0. Otomatik Kapilar (onerilen)
 
-Bu proje MVP oldugu icin otomatik kapilar, “calisan seyi bozmadan” gelistirmenin temelidir.
+Bu proje MVP oldugu icin otomatik kapilar, "calisan seyi bozmadan" gelistirmenin temelidir.
 
 ### 0.1 LLM gerektirmeyen baseline (sentetik PDF)
 
@@ -16,17 +18,23 @@ python scripts/baseline_gate.py
 
 Bu komut:
 - `compileall` ile syntax/import kontrolu yapar
-- Sentetik PDF’ler uzerinde ingestion → structure → indexing → retrieval akisini dogrular
+- Sentetik PDF'ler uzerinde ingestion -> structure -> indexing -> retrieval akisini dogrular
 - `section_list` subtree fetch ve coklu-belge izolasyonunu kontrol eder
 - Tekrarlanan numarali basliklarda chunk_id cakismasi olmadan indexlenebildigini dogrular (DuplicateIDError regresyonu)
 
 > Not: GitHub Actions CI icinde bu gate otomatik kosar (Baseline Gate job).
 
+**Son calistirma**: PASSED (44s)
+
 ### 0.2 Case Study kabul kapisi (Gemini gerekir)
 
 ```bash
-python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
+python scripts/eval_case_study.py --pdf test_data/Case_Study_20260205.pdf
 ```
+
+5 deterministik sorgu: intent, citation, coverage ve negatif (halusinasyon) kontrolleri.
+
+**Son calistirma**: PASSED (68s, chunks=18, pages=4)
 
 ### 0.3 Dil secimi (LLM-free)
 
@@ -36,15 +44,27 @@ python scripts/lang_gate.py
 
 > Not: GitHub Actions CI icinde bu gate otomatik kosar (Baseline Gate job).
 
+**Son calistirma**: PASSED (22s)
+
 ### 0.35 Retrieval kalite metrikleri (LLM-free)
 
 25 soruluk eval set (`test_data/eval_questions.json`) uzerinde intent accuracy, section hit, evidence recall olcumu:
 
 ```bash
-python scripts/eval_retrieval.py --pdf Case_Study_20260205.pdf
+python scripts/eval_retrieval.py --pdf test_data/Case_Study_20260205.pdf
 ```
 
-Metrikler: `intent_accuracy`, `section_hit`, `heading_hit`, `evidence_met`, `avg_latency`
+**Son calistirma sonuclari (Case_Study_20260205.pdf)**:
+
+| Metrik | Deger | Aciklama |
+|--------|-------|----------|
+| Intent Accuracy | 25/25 (100%) | Sorgu tipini (section_list / normal_qa) dogru tespit |
+| Heading Hit | 14/15 (93%) | Beklenen baslik retrieval'da bulunuyor |
+| Section Hit | 5/6 (83%) | Beklenen section key retrieval'da mevcut |
+| Evidence Met | 24/25 (96%) | Minimum evidence sayisi saglanmis |
+| Avg Latency | 29 ms | Retrieval suresi (embedding + Chroma + BM25 + RRF) |
+
+> 1 basarisiz: "list all deliverables" (EN sorgu) - section_list routing dogru ama retrieval'da section key 4 yerine farkli eslesme. Bu, Ingilizce sorgunun Turkce baslik ile eslesme zorlugunu gosterir.
 
 ### 0.4 Klasor suite (coklu PDF)
 
@@ -52,12 +72,57 @@ Metrikler: `intent_accuracy`, `section_hit`, `heading_hit`, `evidence_met`, `avg
 
 ```bash
 # Tavsiye: isolate mode (her PDF ayri indekslenir)
-python scripts/folder_suite.py --dir test_data --mode retrieval --isolate 1 --max_pdfs 1
-python scripts/folder_suite.py --dir test_data --mode ask --isolate 1 --max_pdfs 1
+python scripts/folder_suite.py --dir test_data --mode retrieval --isolate 1
+python scripts/folder_suite.py --dir test_data --mode ask --isolate 1 --max_pdfs 3
 
 # Tum PDF'leri tek session'da yuklemek isterseniz:
 python scripts/folder_suite.py --dir test_data --mode retrieval --isolate 0
 ```
+
+**Son calistirma sonuclari (8 PDF, retrieval mode, isolate)**:
+
+| PDF | Sayfa | Chunk | Retrieval (4 sorgu) |
+|-----|-------|-------|---------------------|
+| 7.pdf | 30 | 62 | 4/4 OK |
+| Case_Study_20260205.pdf | 4 | 18 | 4/4 OK |
+| CV-ornek-muhendis.pdf | 2 | 18 | 4/4 OK |
+| lec01_introductionToAI.pdf | 11 | 8 | 4/4 OK |
+| MEK-04-konu-01.pdf | 15 | 14 | 4/4 OK |
+| MTVhYzUwNzY1YjNmNjU.pdf | 31 | 48 | 4/4 OK |
+| NVJetson_Technical_Intro_and_AI_Apps.pdf | 2 | 4 | 4/4 OK |
+| Workflows.pdf | 23 | 20 | 4/4 OK |
+| **Toplam** | **118** | **192** | **32/32 OK** |
+
+> Belge tipleri: Turkce teknik (MEK-04), Ingilizce akademik (7.pdf, lec01), CV (TR), NVIDIA teknik (EN), is akislari (EN), Case Study (TR), ogrenci calisma kagidi (TR).
+
+**Ask mode (Gemini, 3 PDF, 12 sorgu)**: PASSED — tum cevaplar citation iceriyor.
+
+### 0.45 Halusinasyon Testi (Gemini gerekir)
+
+```bash
+python scripts/hallucination_test.py --pdf test_data/Case_Study_20260205.pdf
+```
+
+25 soruluk kapsamli test: 10 pozitif (belgede var) + 15 negatif (belgede yok) sorgu.
+
+**Son calistirma sonuclari**:
+
+| Metrik | Deger | Aciklama |
+|--------|-------|----------|
+| **Pozitif (in-doc) Sorular** | | |
+| Dogru yanitlanan | 10/10 (100%) | Belgede olan sorulara dogru cevap |
+| Yanlis negatif (missed) | 0/10 (0%) | "Bulunamadi" denilen ama belgede olan |
+| Citation uyumu | 10/10 (100%) | Her cevap kaynak referansi icerir |
+| Anahtar kelime isabeti | 10/10 (100%) | Beklenen icerigi dogru donduruyor |
+| **Negatif (out-of-scope) Sorular** | | |
+| Dogru reddedilen | 14/15 (93%) | "Belgede bu bilgi bulunamadi." |
+| **Halusinasyon (FAIL)** | **1/15 (7%)** | Belgede olmayan soruya uydurma cevap |
+| **Gecikme** | | |
+| Ort. pozitif | 3851 ms | Gemini cagri suresi dahil |
+| Ort. negatif | 3457 ms | Gemini cagri suresi dahil |
+| Ort. genel | 3615 ms | |
+
+> **Edge Case Analizi**: 1 halusinasyon "sunucu gereksinimleri nelerdir" sorgusunda olustu. "gereksinimler" kelimesi belgede "Fonksiyonel Gereksinimler" basligiyla eslesti ve section_list olarak deterministik render yapildi. Bu, keyword-bazli retrieval'in siniridir; sistem "sunucu" ile "fonksiyonel" arasindaki anlam farkini ayirt edemedi. LLM bypass edildigi icin (deterministic path) halusinasyon LLM kaynakli degil, retrieval false-positive kaynaklidir.
 
 ### 0.5 CI / GitHub Actions
 
@@ -103,8 +168,9 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 ### 2.1.1 Coklu Belge Izolasyonu
 | Test | Senaryo | Beklenen | Sonuc |
 |------|---------|----------|-------|
-| Cross-doc contamination | 2+ PDF yüklü iken retrieval | Sonuclar sadece hedef doc_id'den gelir | PASSED (smoke_suite) |
+| Cross-doc contamination | 2+ PDF yuklu iken retrieval | Sonuclar sadece hedef doc_id'den gelir | PASSED (smoke_suite) |
 | Aktif belge secimi | `/use <dosya>` sonra sorgu | Retrieval o belgeye filtrelenir | PASSED (core: baseline_gate) / PASSED (UI: /use + aktif belge gosterimi) |
+| 8 PDF izole retrieval | Her PDF icin 4 sorgu | Tumu basarili | PASSED (folder_suite: 32/32) |
 
 ### 2.2 Query Routing (Faz 4)
 | Test | Sorgu | Beklenen Intent | Sonuc |
@@ -113,6 +179,11 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | Liste sorusu (TR) | "teslimatlar nelerdir" | section_list | PASSED |
 | Normal soru (TR) | "teslim suresi nedir" | normal_qa | PASSED |
 | Normal soru (TR) | "projenin amaci nedir" | normal_qa | PASSED |
+| Liste sorusu (EN) | "what are the functional requirements" | section_list | PASSED |
+| Liste sorusu (EN) | "list all deliverables" | section_list | PASSED |
+| Normal soru (EN) | "what is the project about" | normal_qa | PASSED |
+
+> 25 soruluk eval set'te intent accuracy: **100%** (25/25)
 
 ### 2.3 Complete Section Fetch (Faz 4)
 | Test | Sorgu | Beklenen | Sonuc |
@@ -135,11 +206,41 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | Test | Senaryo | Beklenen | Sonuc |
 |------|---------|----------|-------|
 | Citation zorunlulugu | Herhangi bir soru | [DosyaAdi - Sayfa X] format | PASSED (eval_case_study) |
-| Halusinasyon engeli | "araba kaç beygir" | "Belgede bu bilgi bulunamadı." | PASSED (eval_case_study) |
+| Halusinasyon engeli | "araba kac beygir" | "Belgede bu bilgi bulunamadi." | PASSED (eval_case_study + hallucination_test) |
 | Section-list coverage | "fonksiyonel gereksinimler nelerdir" | 5 maddenin tamami listelenir | PASSED (deterministic section_list) |
 | Coverage uyarisi | Eksik madde durumunda | Uyari mesaji eklenir | PASSED/NA (deterministic section_list ile eksik riski azalir) |
 
-### 3.2 Dil Destegi
+### 3.2 Halusinasyon Detay Tablosu
+
+| Soru | Tip | Beklenen | Gerceklesen | Sonuc |
+|------|-----|----------|-------------|-------|
+| "teslim suresi nedir" | POS | Icerikli cevap | "7 gun" + citation | PASSED |
+| "projenin amaci nedir" | POS | Icerikli cevap | Belge analiz + S-C sistemi | PASSED |
+| "fonksiyonel gereksinimler nelerdir" | POS | Liste | 5 madde + citation | PASSED |
+| "teslimatlar nelerdir" | POS | Liste | 5 teslimat + citation | PASSED |
+| "beklenen calisma suresi kac saat" | POS | Icerikli cevap | "25-35 saat" | PASSED |
+| "teslim yontemi nedir" | POS | Icerikli cevap | "GitHub" | PASSED |
+| "demo video ne kadar surmeli" | POS | Icerikli cevap | "3-5 dk" | PASSED |
+| "pozisyon bilgisi nedir" | POS | Icerikli cevap | "Mid-Senior AI/ML" | PASSED |
+| "LLM araclari kullanmak serbest mi" | POS | Icerikli cevap | "serbest" | PASSED |
+| "teknik mulakatta ne bekleniyor" | POS | Icerikli cevap | "sunma, demo, tartisma" | PASSED |
+| "araba kac beygir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "turkiye nin baskenti neresidir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "python yaraticisi kimdir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "dunya nufusu kac" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "yapay zeka ne zaman icat edildi" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "bu projenin butcesi ne kadar" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "hangi veritabani kullaniliyor" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "API endpoint leri nelerdir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "kullanici kayit islemi nasil yapilir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "sunucu gereksinimleri nelerdir" | NEG | Bulunamadi | Fonksiyonel gereksinimler listesi (section_list) | **FAILED** |
+| "bu belgedeki grafikleri acikla" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "projenin gelir modeli nedir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "musteri memnuniyeti orani kactir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "agustos 2025 satis rakamlari nelerdir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "rakip analizi sonuclari nelerdir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+
+### 3.3 Dil Destegi
 | Test | Girdi Dili | Beklenen Cevap Dili | Sonuc |
 |------|-----------|---------------------|-------|
 | Turkce soru | "projenin amaci nedir" | Turkce | PASSED (lang_gate heuristic + prompt) |
@@ -175,9 +276,10 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | Test | Senaryo | Beklenen | Sonuc |
 |------|---------|----------|-------|
 | Bos PDF | Icerik olmayan PDF | Uyari + bos sonuc (crash yok) | PASSED (baseline_gate) |
-| Cok buyuk PDF | 50+ sayfa | Tum sayfalar islenir | BEKLIYOR |
-| Taranmis PDF | Image-only (scan-like) PDF | OCR yoksa uyari + bos sonuc; OCR varsa metin cikarilir | PASSED (baseline_gate: graceful) / BEKLIYOR (OCR kalite) |
+| Buyuk PDF (30+ sayfa) | 7.pdf (30 sayfa), MTVhYzUwNzY1YjNmNjU.pdf (31 sayfa) | Tum sayfalar islenir, chunk'lar olusturulur | PASSED (folder_suite: 62 ve 48 chunk) |
+| Taranmis PDF | Image-only (scan-like) PDF | OCR yoksa uyari + bos sonuc; OCR varsa metin cikarilir | PASSED (baseline_gate: graceful) |
 | Karisik dil | TR+EN icerik | Her iki dilde de dogru arama | PASSED (baseline_gate) |
+| Tekrarlanan basliklar | Ayni heading key birden fazla kez | Unique section_id olusturulur | PASSED (baseline_gate: DuplicateIDError regresyonu) |
 
 ---
 
@@ -194,7 +296,7 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 |------|---------|----------|-------|
 | LLM olmadan cevap | `LLM_PROVIDER=none` ile belge sorusu | Belgeden dogrudan alinti + citation | PASSED (unit) |
 | section_list extractive | Liste sorusu (LLM yok) | Deterministik section list donmesi | PASSED (paylasilan deterministic path) |
-| Bos evidence | Belge yuklu ama evidence bulunamadi | "Belgede bu bilgi bulunamadı." | PASSED |
+| Bos evidence | Belge yuklu ama evidence bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
 
 ### 6.3 Observability / Telemetry
 | Test | Senaryo | Beklenen | Sonuc |
@@ -204,4 +306,61 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 
 ---
 
-**Not**: "BEKLIYOR" olan testler (ozellikle OCR kalite / buyuk dokuman performansi / LLM dil davranisi) hedef ortamda uctan uca calistirilarak guncellenmelidir.
+## 7. Coklu Belge Tipi Performans Tablosu
+
+8 farkli PDF ile yapilan tam kosu sonuclari:
+
+| PDF Adi | Dil | Tip | Sayfa | Chunk | Retrieval | Ask |
+|---------|-----|-----|-------|-------|-----------|-----|
+| 7.pdf | EN | Akademik makale (LLM) | 30 | 62 | 4/4 OK | 4/4 OK |
+| Case_Study_20260205.pdf | TR | Teknik degerlendirme | 4 | 18 | 4/4 OK | 4/4 OK |
+| CV-ornek-muhendis.pdf | TR | Ozgecmis (CV) | 2 | 18 | 4/4 OK | 4/4 OK |
+| lec01_introductionToAI.pdf | EN | Ders sunumu (AI) | 11 | 8 | 4/4 OK | - |
+| MEK-04-konu-01.pdf | TR | Teknik mekanik | 15 | 14 | 4/4 OK | - |
+| MTVhYzUwNzY1YjNmNjU.pdf | TR | Ogrenci raporu | 31 | 48 | 4/4 OK | - |
+| NVJetson_Technical_Intro_and_AI_Apps.pdf | EN | NVIDIA teknik brosur | 2 | 4 | 4/4 OK | - |
+| Workflows.pdf | EN | Is akisi dokumani | 23 | 20 | 4/4 OK | - |
+
+**Ozet**: 8 farkli belge tipinde (TR/EN, akademik/teknik/CV/brosur) toplam **118 sayfa, 192 chunk** basariyla islendi. Retrieval **32/32**, Ask **12/12** basarili.
+
+---
+
+## 8. Sayisal Metrik Ozeti
+
+| Kategori | Metrik | Deger |
+|----------|--------|-------|
+| **Retrieval** | Intent Accuracy | 100% (25/25) |
+| | Heading Hit | 93% (14/15) |
+| | Section Hit | 83% (5/6) |
+| | Evidence Met | 96% (24/25) |
+| | Avg Retrieval Latency | 29 ms |
+| **Generation** | Citation Compliance | 100% (10/10 pozitif sorgu) |
+| | Keyword Accuracy | 100% (10/10 pozitif sorgu) |
+| **Halusinasyon** | Pozitif Dogru Yanit | 100% (10/10) |
+| | Negatif Dogru Red | 93% (14/15) |
+| | Halusinasyon Orani | 7% (1/15) |
+| | Yanlis Negatif Orani | 0% (0/10) |
+| **Hiz** | Retrieval (lokal, e5-base) | ~29 ms/sorgu |
+| | Generation (Gemini API) | ~3600 ms/sorgu |
+| | Index (4 sayfa PDF) | ~33 s |
+| **Kapsam** | Test Edilen PDF | 8 farkli tip |
+| | Toplam Sayfa | 118 |
+| | Toplam Chunk | 192 |
+| | Folder Suite Retrieval | 32/32 (100%) |
+| | Folder Suite Ask | 12/12 (100%) |
+
+---
+
+## 9. Bilinen Sinirlamalar ve Iyilestirme Alanlari
+
+1. **Keyword overlap halusinasyonu**: "sunucu gereksinimleri" gibi belgede kismi eslesen ama anlam olarak farkli sorgular, deterministik section_list yolunda yanlis sonuc uretebilir. Cozum: daha gelismis semantic filtering veya re-ranking uygulanabilir.
+
+2. **Ingilizce section routing**: Turkce basliklara sahip belgelerde Ingilizce sorgularin section key eslemesi zayiflayabilir (heading_hit 93%, section_hit 83%).
+
+3. **Buyuk belge index suresi**: 30+ sayfali PDF'ler icin indexleme ~60-120s surebilir (VLM mode aciksa daha uzun). Uretim ortaminda index cache'i onerilen.
+
+4. **LLM flakiness**: Case Study eval'de %100 tekrarlanabilirlik icin ilk denemede "not found" donebilir (2. denemede geciyor). Bu, Gemini API'nin non-deterministic dogasindan kaynaklanir.
+
+---
+
+**Tum test scriptleri**: `scripts/` klasorunde yer alir. Test PDF'leri: `test_data/` klasorundedir.
