@@ -5,6 +5,7 @@ PDF ve gorsel (JPG, PNG) belgelerinizi yukleyin, ardindan Turkce veya Ingilizce 
 ## Ozellikler
 
 - PDF metin katmani + OCR (taranmis belgeler icin)
+- Gorsellerde OCR kalite iyilestirme: EXIF yon duzeltme + upscale + birden fazla preprocess adayi ve otomatik en-iyi-secim
 - (Opsiyonel) VLM (Gemini multimodal) ile **extract-only** metin cikarimi (tablo / cok kolonlu sayfalar icin)
 - Dual-quality secim: PDF/OCR/VLM adaylari arasindan baslik/structure korunumu daha iyi olani secilir
 - Hiyerarsik bolum algilama ve eksiksiz bolum getirme
@@ -20,9 +21,25 @@ PDF ve gorsel (JPG, PNG) belgelerinizi yukleyin, ardindan Turkce veya Ingilizce 
   - `/chat`: Belge olmadan sohbet
   - `/doc`: Belge modu (belge sorulari)
   - `/use <dosya>`: Aktif belge sec
+  - `/debug on|off`: Debug panelini ac/kapat (varsayilan: kapali)
 
 ## Notlar
 
 - Doc modda belge yoksa, belge sorulari icin once belge yuklemeniz istenir.
 - Birden fazla belge yuklediyseniz, soru hedefini netlestirmek icin `/use <dosya>` kullanin.
+- Ayni dosyayi (icerik ayni) **ayni oturumda** tekrar yuklerseniz sistem yeniden indekslemez; sadece o dokumani aktif hale getirir (hizli).
 - (Opsiyonel) Loglama: Soru/cevaplari JSONL olarak kaydetmek icin `.env` icinde `RAG_LOG=1` yapabilirsiniz (detay: `README.md`).
+- UI iyilestirmeleri: karsilama mesajinda hizli butonlar (Belge Modu / Sohbet Modu / Debug) ve coklu belge durumunda tek tikla belge secimi bulunur.
+- Durum Paneli: aktif belge / mod / LLM-VLM / toplam chunk bilgisi gosterilir (tek bir mesaj guncellenir).
+- Chat Settings: VLM mode ve max page limitini arayuzden ayarlayabilirsiniz (session-only).
+
+## Local (Offline) Mod
+
+Tum sistem internet baglantisi olmadan calisabilir. `.env` icinde:
+
+```ini
+LLM_PROVIDER=local
+VLM_PROVIDER=local
+```
+
+Ollama'nin kurulu ve calisiyor olmasi gerekir. Detay: `README.md`.

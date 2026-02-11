@@ -39,6 +39,7 @@ def main() -> int:
         lang="tur+eng",
         tesseract_cmd=settings.tesseract_cmd,
         tessdata_prefix=settings.tessdata_prefix,
+        tesseract_config=getattr(settings, "tesseract_config", None),
     )
     ingest = ingest_any(Path(args.path), ocr=ocr)
     root = build_section_tree(ingest)

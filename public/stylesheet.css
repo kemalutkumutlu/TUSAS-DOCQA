@@ -1,0 +1,63 @@
+/* Lightweight, non-invasive UI polish for Chainlit.
+   Goal: better spacing/contrast, corporate feel, no layout breakage. */
+
+:root {
+  --tusas-accent: #3b82f6; /* blue */
+  --tusas-bg: #0b1220;     /* deep navy */
+  --tusas-panel: #0f1b32;
+  --tusas-text: #e5e7eb;
+  --tusas-muted: #9ca3af;
+}
+
+/* Background + typography */
+body {
+  background: radial-gradient(1200px 600px at 20% -10%, rgba(59, 130, 246, 0.25), transparent 60%),
+              radial-gradient(1000px 500px at 90% 0%, rgba(56, 189, 248, 0.18), transparent 55%),
+              var(--tusas-bg) !important;
+}
+
+/* Header brand */
+header, .cl-header {
+  backdrop-filter: blur(8px);
+}
+
+/* Message bubbles: slightly more separation */
+.cl-message {
+  line-height: 1.55;
+}
+
+.cl-message .prose {
+  max-width: 72ch;
+}
+
+/* Make details blocks look nicer */
+details {
+  margin-top: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.03);
+}
+
+details > summary {
+  cursor: pointer;
+  color: var(--tusas-text);
+  font-weight: 600;
+}
+
+/* Buttons (Actions) */
+button, .cl-action-button {
+  border-radius: 10px !important;
+}
+
+/* Subtle accent for links / code */
+a {
+  color: #93c5fd;
+}
+
+code {
+  background: rgba(255,255,255,0.06);
+  padding: 2px 6px;
+  border-radius: 8px;
+}
+

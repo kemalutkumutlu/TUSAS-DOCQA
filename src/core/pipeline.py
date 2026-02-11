@@ -16,7 +16,15 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from uuid import uuid4
 
-from .generation import GenerationResult, generate_answer, generate_chat_answer, generate_extractive_answer
+from .generation import (
+    GenerationResult,
+    generate_answer,
+    generate_answer_local,
+    generate_chat_answer,
+    generate_chat_answer_local,
+    generate_extractive_answer,
+)
+from .local_llm import OllamaConfig
 from .eventlog import JsonlEventLogger
 from .indexing import LocalIndex
 from .ingestion import OCRConfig, ingest_any, IngestResult
@@ -24,6 +32,7 @@ from .vlm_extract import VLMConfig
 from .models import Chunk
 from .retrieval import RetrievalResult, retrieve, classify_query
 from .structure import build_section_tree, section_tree_to_chunks
+from .utils import sha256_file
 
 
 @dataclass
@@ -34,6 +43,7 @@ class DocumentState:
     chunks: List[Chunk]
     page_count: int
     warnings: List[str]
+    build_fingerprint: str = ""
 
 
 @dataclass
@@ -49,7 +59,8 @@ class RAGPipeline:
     ocr_config: OCRConfig
     embedding_device: str = "auto"
     vlm_config: Optional[VLMConfig] = None
-    llm_provider: str = "gemini"  # "gemini" | "openai" | "none"
+    llm_provider: str = "gemini"  # "gemini" | "openai" | "local" | "none"
+    ollama_config: Optional[OllamaConfig] = None
 
     # State
     _documents: Dict[str, DocumentState] = field(default_factory=dict)
@@ -77,6 +88,48 @@ class RAGPipeline:
         Ingest a document, build structure, create chunks, and rebuild index.
         Returns the document state.
         """
+        # If the file bytes are identical AND ingestion/index settings are identical,
+        # skip re-processing entirely to avoid redundant OCR/VLM + embedding work.
+        #
+        # doc_id is sha256(file_bytes) (see ingestion.py). Computing it here is cheap
+        # compared to OCR/VLM and embeddings, and allows a fast early-exit.
+        doc_id = sha256_file(file_path)
+
+        def _fingerprint() -> str:
+            o = self.ocr_config
+            v = self.vlm_config
+            # Keep fingerprint stable and conservative: include only settings that can
+            # affect extracted text/chunking or embedding consistency.
+            parts = [
+                f"emb_model={self.embedding_model}",
+                f"emb_dev={self.embedding_device}",
+                f"ocr_enabled={bool(o.enabled)}",
+                f"ocr_lang={o.lang}",
+                f"tess_cmd={o.tesseract_cmd or ''}",
+                f"tessdata={o.tessdata_prefix or ''}",
+                f"tess_cfg={getattr(o, 'tesseract_config', None) or ''}",
+            ]
+            if v is None:
+                parts.append("vlm=none")
+            else:
+                parts.extend(
+                    [
+                        f"vlm_provider={getattr(v, 'provider', 'gemini')}",
+                        f"vlm_mode={v.mode}",
+                        f"vlm_model={v.model}",
+                        f"vlm_max_pages={v.max_pages}",
+                        f"vlm_has_key={bool(v.api_key)}",
+                    ]
+                )
+            return "|".join(parts)
+
+        fp = _fingerprint()
+        existing = self._documents.get(doc_id)
+        if existing and (existing.build_fingerprint == fp):
+            # Treat this upload as a "select active document" action.
+            self._active_doc_id = doc_id
+            return existing
+
         ingest = ingest_any(
             file_path,
             ocr=self.ocr_config,
@@ -92,6 +145,7 @@ class RAGPipeline:
             chunks=chunks,
             page_count=len(ingest.pages),
             warnings=ingest.warnings,
+            build_fingerprint=fp,
         )
         self._documents[ingest.doc_id] = state
         self._active_doc_id = ingest.doc_id
@@ -310,6 +364,12 @@ class RAGPipeline:
             empty = RetrievalResult(intent=classify_query(query), evidences=[], section_complete=False, coverage=None)
             if self.llm_provider == "none":
                 result = generate_extractive_answer(retrieval=empty, query=query)
+            elif self.llm_provider == "local" and self.ollama_config:
+                result = generate_answer_local(
+                    retrieval=empty,
+                    query=query,
+                    ollama_cfg=self.ollama_config,
+                )
             else:
                 result = generate_answer(
                     retrieval=empty,
@@ -353,6 +413,12 @@ class RAGPipeline:
         _t_gen = time.perf_counter()
         if self.llm_provider == "none":
             result = generate_extractive_answer(retrieval=ret, query=query)
+        elif self.llm_provider == "local" and self.ollama_config:
+            result = generate_answer_local(
+                retrieval=ret,
+                query=query,
+                ollama_cfg=self.ollama_config,
+            )
         else:
             result = generate_answer(
                 retrieval=ret,
@@ -395,6 +461,11 @@ class RAGPipeline:
         """
         Chat-only mode (no retrieval).
         """
+        if self.llm_provider == "local" and self.ollama_config:
+            return generate_chat_answer_local(
+                query=query,
+                ollama_cfg=self.ollama_config,
+            )
         return generate_chat_answer(
             query=query,
             gemini_api_key=self.gemini_api_key,

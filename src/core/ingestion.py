@@ -8,6 +8,7 @@ import os
 import re
 import fitz  # PyMuPDF
 from PIL import Image
+from PIL import ImageFilter, ImageOps
 
 from .models import IngestResult, PageText
 from .utils import normalize_whitespace, sha256_file
@@ -20,6 +21,9 @@ class OCRConfig:
     lang: str = "tur+eng"
     tesseract_cmd: Optional[str] = None
     tessdata_prefix: Optional[str] = None
+    # Optional passthrough for pytesseract `config=` (e.g. "--psm 6 --oem 3").
+    # Keep default None to preserve existing behavior.
+    tesseract_config: Optional[str] = None
 
 
 def _text_quality_low(text: str) -> bool:
@@ -119,6 +123,90 @@ def _configure_tesseract(tesseract_cmd: Optional[str], tessdata_prefix: Optional
         return
 
 
+def _safe_exif_transpose(img: Image.Image) -> Image.Image:
+    """
+    Normalize image orientation using EXIF if present.
+    This is critical for phone photos / scanned images.
+    """
+    try:
+        return ImageOps.exif_transpose(img)
+    except Exception:
+        return img
+
+
+def _maybe_upscale_for_ocr(img: Image.Image, min_short_side: int = 1200, max_long_side: int = 3200) -> Image.Image:
+    """
+    Upscale small images to improve OCR quality, but cap size to avoid huge latency.
+    Pillow-only (no OpenCV dependency).
+    """
+    try:
+        w, h = img.size
+        short = min(w, h)
+        long = max(w, h)
+        if short >= min_short_side:
+            return img
+        scale = min_short_side / max(1, short)
+        # Cap long side to avoid extreme upscales.
+        if long * scale > max_long_side:
+            scale = max_long_side / max(1, long)
+        if scale <= 1.01:
+            return img
+        nw = max(1, int(round(w * scale)))
+        nh = max(1, int(round(h * scale)))
+        return img.resize((nw, nh), resample=Image.Resampling.LANCZOS)
+    except Exception:
+        return img
+
+
+def _preprocess_variants_for_ocr(img_rgb: Image.Image) -> list[Image.Image]:
+    """
+    Build a small set of OCR-friendly variants.
+    We keep the original in the candidate list to avoid regressions.
+    """
+    variants: list[Image.Image] = []
+    base = img_rgb
+    variants.append(base)
+
+    up = _maybe_upscale_for_ocr(base)
+    if up is not base:
+        variants.append(up)
+
+    try:
+        g = ImageOps.grayscale(up)
+        g = ImageOps.autocontrast(g)
+        variants.append(g)
+        # Light sharpening can help thin fonts.
+        variants.append(g.filter(ImageFilter.UnsharpMask(radius=1.6, percent=160, threshold=3)))
+        # Simple binarization (global threshold). Keep conservative to avoid wiping faint text.
+        thr = 190
+        bw = g.point(lambda p: 255 if p > thr else 0, mode="1")
+        variants.append(bw.convert("L"))
+    except Exception:
+        pass
+
+    # Deduplicate by size+mode to avoid repeated OCR work.
+    uniq: list[Image.Image] = []
+    seen: set[tuple[int, int, str]] = set()
+    for im in variants:
+        key = (im.size[0], im.size[1], im.mode)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(im)
+    return uniq
+
+
+def _ocr_image_text(img: Image.Image, lang: str, cfg: OCRConfig) -> str:
+    """
+    OCR one image with pytesseract, returning raw text (may be empty).
+    """
+    import pytesseract  # noqa: WPS433
+
+    # pytesseract supports L/RGB images; keep as-is.
+    config = (cfg.tesseract_config or "").strip()
+    return pytesseract.image_to_string(img, lang=lang, config=config) or ""
+
+
 def ingest_pdf(
     path: Path,
     ocr: OCRConfig,
@@ -179,7 +267,12 @@ def ingest_pdf(
                     source = "pdf_text"
 
             # VLM fallback (extract-only) for low-quality pages.
-            if vlm and vlm.mode != "off" and vlm_pages_used < vlm.max_pages:
+            #
+            # IMPORTANT: In local (Ollama) mode, VLM does not require an API key.
+            # In Gemini mode, we require `api_key` to be present.
+            if vlm and vlm.mode != "off" and vlm_pages_used < vlm.max_pages and (
+                getattr(vlm, "provider", "gemini") == "local" or bool(getattr(vlm, "api_key", ""))
+            ):
                 try:
                     should_vlm = vlm.mode == "force" or (vlm.mode == "auto" and _text_quality_low(text_norm))
                     if should_vlm:
@@ -225,41 +318,54 @@ def ingest_image(
     warnings: list[str] = []
 
     text_norm = ""
-    if vlm and vlm.mode in ("force", "auto") and vlm.api_key:
+    # Load image once; reuse for OCR/VLM candidates.
+    try:
+        img_rgb = _safe_exif_transpose(Image.open(path)).convert("RGB")
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"Image open failed: {e}")
+        img_rgb = None
+
+    # Candidate list: (text, source)
+    cands: list[tuple[str, str]] = []
+
+    if vlm and vlm.mode in ("force", "auto") and img_rgb is not None and (
+        getattr(vlm, "provider", "gemini") == "local" or bool(getattr(vlm, "api_key", ""))
+    ):
         try:
-            img = Image.open(path).convert("RGB")
-            vlm_text = extract_text_from_image(img, cfg=vlm)
-            text_norm = normalize_whitespace(vlm_text)
-            source = "vlm"
+            vlm_text = extract_text_from_image(img_rgb, cfg=vlm)
+            vlm_text_norm = normalize_whitespace(vlm_text)
+            cands.append((vlm_text_norm, "vlm"))
         except Exception as e:  # noqa: BLE001
             warnings.append(f"VLM image extract failed: {e}")
-            source = "image_ocr"
-    elif ocr.enabled:
-        try:
-            import pytesseract  # noqa: WPS433
+            # fall through; OCR candidates may still succeed
 
-            img = Image.open(path).convert("RGB")
-            ocr_text = pytesseract.image_to_string(img, lang=ocr.lang) or ""
-            text_norm = normalize_whitespace(ocr_text)
-            source = "image_ocr"
+    if ocr.enabled and img_rgb is not None:
+        try:
+            # Multi-pass OCR: try original + a few safe preprocess variants, then pick
+            # the best by structure score (same idea as dual-quality in PDFs).
+            ocr_variants = _preprocess_variants_for_ocr(img_rgb)
+            # Cap work: keep only first few (ordered by cheap->expensive).
+            ocr_variants = ocr_variants[:4]
+            for im in ocr_variants:
+                ocr_text = _ocr_image_text(im, lang=ocr.lang, cfg=ocr)
+                ocr_text_norm = normalize_whitespace(ocr_text)
+                if ocr_text_norm:
+                    cands.append((ocr_text_norm, "image_ocr"))
         except Exception as e:  # noqa: BLE001
             warnings.append(f"Image OCR failed: {e}")
-            source = "image_ocr"
+
+    if not cands:
+        if img_rgb is None:
+            warnings.append("Image ingestion produced empty text (failed to open image).")
+        elif not ocr.enabled and not (vlm and (getattr(vlm, "provider", "gemini") == "local" or bool(vlm.api_key))):
+            warnings.append("OCR disabled and VLM unavailable; image ingestion produced empty text.")
+        else:
+            warnings.append("Image ingestion produced empty text.")
+        text_norm, source = "", "image_ocr"
     else:
-        warnings.append("OCR disabled; image ingestion produced empty text.")
-        source = "image_ocr"
-
-    # If both OCR and VLM are available (force/auto) we can still choose best by structure.
-    if vlm and vlm.mode == "force" and ocr.enabled and source == "vlm":
-        try:
-            import pytesseract  # noqa: WPS433
-
-            img = Image.open(path).convert("RGB")
-            ocr_text = pytesseract.image_to_string(img, lang=ocr.lang) or ""
-            ocr_text_norm = normalize_whitespace(ocr_text)
-            text_norm, source = _pick_best_candidate([(text_norm, "vlm"), (ocr_text_norm, "image_ocr")])
-        except Exception:
-            pass
+        # Prefer whichever preserves structure best. This is safe because the
+        # original OCR/VLM candidates are still present; switching requires score gain.
+        text_norm, source = _pick_best_candidate(cands)
 
     pages = [
         PageText(

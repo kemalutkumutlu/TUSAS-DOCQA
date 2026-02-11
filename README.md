@@ -20,11 +20,13 @@ Workflow: `.github/workflows/ci.yml`
 
 ```
 PDF/Image ─→ Ingestion ─→ Structure ─→ Chunking ─→ Indexing ─→ Retrieval ─→ Generation
-              (PyMuPDF     (Heading      (Parent/     (Chroma +   (Query      (Gemini +
-               + OCR        Detection     Child)      BM25 +      Routing +    Guardrails)
-               + (opt)      + Tree)                   RRF)        Section
+              (PyMuPDF     (Heading      (Parent/     (Chroma +   (Query      (Gemini /
+               + OCR        Detection     Child)      BM25 +      Routing +    Ollama +
+               + (opt)      + Tree)                   RRF)        Section      Guardrails)
                VLM)                                                  Fetch)
 ```
+
+> **Local (Offline) Mod**: `LLM_PROVIDER=local` ve/veya `VLM_PROVIDER=local` ile tum pipeline Ollama uzerinden calisan yerel LLM/VLM'e yonlendirilir. Hicbir dis API cagrisi yapilmaz — savunma sanayii ve air-gapped ortamlar icin uygundur.
 
 ### Temel Ozellikler
 
@@ -45,6 +47,7 @@ PDF/Image ─→ Ingestion ─→ Structure ─→ Chunking ─→ Indexing ─�
 | **Aktif Belge** | Birden fazla belge yuklendiginde `/use <dosya>` ile hedef belge secilir (varsayilan: son yuklenen) |
 | **Incremental Indexing** | Yeni belge eklendiginde sadece yeni chunk'lar embed edilir; onceki belgeler tekrar islenmez |
 | **LLM-Free Extractive QA** | `LLM_PROVIDER=none` ile LLM olmadan belgeden dogrudan alinti bazli cevap (embedding + retrieval yeterli) |
+| **Local (Offline) Mod** | `LLM_PROVIDER=local` + `VLM_PROVIDER=local` ile Ollama uzerinden tamamen yerel LLM/VLM. Dis API yok, air-gapped ortam destegi |
 | **Observability** | Index build, retrieval ve generation sureleri event log'a kaydedilir (`RAG_LOG=1`) |
 
 ## Kurulum (Windows)
@@ -108,7 +111,22 @@ Ardindan `.env` icinde:
 ```ini
 TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
 TESSDATA_PREFIX=./data/tessdata
+TESSERACT_CONFIG=--psm 6 --oem 3
 ```
+
+#### Gorsellerde kalite (JPG/PNG) — PDF’e yaklastirma
+
+Gorsellerde text-layer olmadigi icin kalite **OCR/VLM** basarisina baglidir. Bu proje gorsel ingestion’da
+PDF’e benzer “dual-quality” yaklasimi uygular:
+
+- **EXIF yon duzeltme**: Telefon fotosu / tarama goruntulerinde yan donuk sayfalar otomatik duzeltilir.
+- **Upscale + preprocess**: Kucuk/cozunurlugu dusuk goruntuler OCR icin kontrollu bicimde buyutulur; gri tonlama,
+  autocontrast, hafif sharpen ve konservatif threshold varyantlari denenir.
+- **En iyi adayi secme**: OCR (birden cok varyant) ve/veya VLM (extract-only) cikarimlari arasindan, baslik/structure
+  korunumu daha iyi olani otomatik secilir.
+
+> Not: En yuksek tablo/cok-kolon basarisi icin VLM (Gemini multimodal, extract-only) acik olmali (`VLM_MODE=force|auto`
+> ve `GEMINI_API_KEY`).
 
 ### 3) API Anahtari
 
@@ -131,6 +149,53 @@ LLM_PROVIDER=none
 ```
 
 > Bu modda sohbet (`/chat`) desteklenmez; sadece belge sorusu + extractive cevap uretilir.
+
+### 4) (Opsiyonel) Tamamen Yerel / Offline Mod (Ollama)
+
+Savunma sanayii ve air-gapped ortamlar icin tum pipeline disariya baglanti olmadan calisabilir.
+Bu modda LLM ve VLM olarak **Ollama** uzerinde calisan yerel modeller kullanilir.
+
+#### Kurulum
+
+1. [Ollama](https://ollama.com/download) indirin ve kurun.
+2. Gerekli modelleri cekin:
+
+```bash
+ollama pull qwen2.5:7b
+ollama pull llava:7b
+```
+
+3. `.env` dosyasini ayarlayin:
+
+```ini
+LLM_PROVIDER=local
+VLM_PROVIDER=local
+
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_LLM_MODEL=qwen2.5:7b
+OLLAMA_VLM_MODEL=llava:7b
+OLLAMA_TIMEOUT=120
+```
+
+4. Ollama'nin calistigini dogrulayin:
+
+```bash
+ollama list
+```
+
+> **GPU Notu**: GTX 1660 Super (6 GB VRAM) ile `qwen2.5:7b` (Q4 quantize) ve `llava:7b` calistirilabilir.
+> Daha fazla VRAM'e sahip GPU'larda daha buyuk modeller (13B vb.) kullanilabilir.
+>
+> **Onemli**: Local mod aktifken `GEMINI_API_KEY` zorunlu degildir. Embedding her zaman lokal SentenceTransformers ile yapilir.
+>
+> **Mod farklari**:
+> | Ayar | Online (Gemini) | Local (Ollama) | Extractive (none) |
+> |------|-----------------|----------------|--------------------|
+> | LLM | Gemini API | Ollama LLM | Yok |
+> | VLM | Gemini API | Ollama VLM | Yok |
+> | Embedding | Lokal ST | Lokal ST | Lokal ST |
+> | Internet | Gerekli | Gerekli degil | Gerekli degil |
+> | Kalite | En yuksek | GPU'ya bagli | Extractive (basic) |
 
 ### 3.1) (Opsiyonel) VLM Ayarlari (Layout/Tablo icin)
 
@@ -159,6 +224,20 @@ Tarayicida `http://localhost:8000` adresini acin.
 - Belge olmadan sohbet icin: `/chat`
 - Belge sorulari icin: `/doc`
 - Birden fazla belge varsa aktif belge secmek icin: `/use <dosya>`
+- Debug panelini ac/kapatmak icin: `/debug on|off` (varsayilan: kapali)
+- Ayni dosyayi (icerik ayni) **ayni oturumda** tekrar yuklerseniz sistem yeniden OCR/VLM + embedding yapmaz; sadece dokumani aktif hale getirir (hizli). Dosya degisirse veya OCR/VLM ayarlari degisirse yeniden islenir.
+
+### UI (Chainlit) Ozellestirme
+
+- `app.py`:
+  - hizli aksiyon butonlari (Belge Modu / Sohbet Modu / Debug)
+  - coklu belge icin tek tikla aktif belge secimi (Action butonlari)
+  - **Durum Paneli**: aktif belge / mod / LLM-VLM / toplam chunk bilgisi (mesaj update ile spam yapmaz)
+  - dosya yukleme sonunda sure bilgisi (indexleme gecikmelerini anlamak icin)
+  - Chat Settings: `VLM_MODE`, `VLM_MAX_PAGES`, `Debug` toggle (session-only)
+- `.chainlit/config.toml`: UI adi, layout, CoT gizleme (`cot=hidden`) ve custom CSS
+- `public/stylesheet.css`: hafif kurumsal tema iyilestirmesi (non-invasive)
+- `public/theme.json`: UI tema override (font + radius + palette)
 
 ### Mod Davranisi (Kisa)
 

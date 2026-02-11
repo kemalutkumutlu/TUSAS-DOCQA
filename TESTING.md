@@ -257,7 +257,10 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | PDF yukleme | Case_Study_20260205.pdf | Basariyla indekslenir | PASSED (UI kodu + core pipeline) |
 | Gorsel yukleme | JPG/PNG dosya | OCR ile okunur ve indekslenir | PASSED (UI kodu; OCR kurulumu gerekebilir) |
 | Coklu dosya | 2+ dosya yukleme | Hepsi indekslenir | PASSED (UI kodu) |
-| Debug paneli | Soru soruldugunda | Intent, citation, coverage gosterilir | PASSED (UI kodu) |
+| Ayni dosya tekrar yukleme | Aynı PDF/PNG/JPG dosyasini ayni oturumda tekrar yukle | Yeniden indekslemez; sadece aktif dokuman olur (hizli) | PASSED (session-level doc_id + ayar fingerprint skip) |
+| Local (Ollama) mod | `.env`: `LLM_PROVIDER=local`, `VLM_PROVIDER=local`, Ollama calisiyor | Karsilama mesajinda "Local (Offline) Mod" gosterilir; soru sorulabilir, cevap Ollama'dan alinir | PASSED |
+| Debug paneli | `/debug on|off` veya UI butonu | Debug (intent/citation/coverage) sadece aciksa gosterilir | PASSED (toggle) |
+| Coklu belge tek tik secim | 2+ belge yukle | UI action butonlariyla aktif belge secilebilir | PASSED |
 | Hata durumu | API key eksik | Uyari mesaji | PASSED (UI kodu) |
 | Uygulama baslangici | Uygulama acilir acilmaz | Upload zorunlu degil; mesaj yazilabilir | PASSED |
 | Bos belge (doc modu) | Belge yuklemeden belge sorusu | "Henuz belge yuklenmedi..." | PASSED (UI kodu) |

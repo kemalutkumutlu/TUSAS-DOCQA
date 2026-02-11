@@ -630,6 +630,150 @@ def generate_answer(
     )
 
 
+# ── Local LLM generation (Ollama) ──────────────────────────────────────────
+
+def generate_chat_answer_local(
+    query: str,
+    ollama_cfg: "OllamaConfig",
+) -> str:
+    """
+    Chat-only generation via local Ollama (no retrieval, no citations).
+    """
+    from .local_llm import OllamaConfig, ollama_chat  # noqa: F811
+
+    system = _CHAT_SYSTEM_PROMPT + _language_addendum(query)
+    result = ollama_chat(cfg=ollama_cfg, system=system, user_message=f"SORU: {query}", temperature=0.4, max_tokens=1024)
+    return result or "Anlayamadım, tekrar eder misin?"
+
+
+def generate_answer_local(
+    retrieval: RetrievalResult,
+    query: str,
+    ollama_cfg: "OllamaConfig",
+) -> GenerationResult:
+    """
+    Given retrieval results + user query, call local Ollama LLM and return a
+    guarded, cited answer.  Same guardrails / prompts as the Gemini path.
+    """
+    from .local_llm import OllamaConfig, ollama_chat  # noqa: F811
+
+    # Edge case: no evidence
+    if not retrieval.evidences:
+        return GenerationResult(
+            answer="Belgede bu bilgi bulunamadı.",
+            citations_found=0,
+            coverage_expected=None,
+            coverage_actual=None,
+            coverage_ok=None,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    # Deterministic path (shared, no LLM call needed).
+    deterministic = _render_deterministic_section_list(retrieval)
+    if deterministic:
+        citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", deterministic)) + len(
+            re.findall(r"\[[^\]]*?/\s*\d+\s*\]", deterministic)
+        )
+        expected = retrieval.coverage.expected_items if retrieval.coverage else None
+        actual = _count_answer_items(deterministic) if expected is not None else None
+        ok = (actual >= expected) if (expected is not None and actual is not None) else None
+        return GenerationResult(
+            answer=deterministic,
+            citations_found=citations_found,
+            coverage_expected=expected,
+            coverage_actual=actual,
+            coverage_ok=ok,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    context = _build_context(retrieval.evidences)
+
+    # Build system prompt (SAME as Gemini path)
+    system = _SYSTEM_PROMPT_BASE + _language_addendum(query)
+    coverage_expected: Optional[int] = None
+    if retrieval.intent == "section_list" and retrieval.coverage:
+        coverage_expected = retrieval.coverage.expected_items
+        system += _SECTION_LIST_ADDENDUM.format(expected=coverage_expected)
+
+    user_message = (
+        f"BAĞLAM:\n{context}\n\n"
+        f"---\n\n"
+        f"SORU: {query}"
+    )
+
+    def _call_local(sys: str, msg: str, temp: float, max_tok: int = 4096) -> str:
+        return ollama_chat(cfg=ollama_cfg, system=sys, user_message=msg, temperature=temp, max_tokens=max_tok)
+
+    answer = _call_local(system, user_message, 0.1) or "Belgede bu bilgi bulunamadı."
+
+    # Citation counting (same logic as Gemini path)
+    citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+        re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+    )
+
+    # Citation retry
+    if citations_found == 0 and retrieval.evidences and answer.strip() != "Belgede bu bilgi bulunamadı.":
+        system_retry = (
+            system
+            + "\n\nFORMAT DÜZELTME MODU:\n"
+            + "- Sadece cevabı yeniden yaz.\n"
+            + "- Her cümle/madde sonunda mutlaka [DosyaAdı - Sayfa X] kaynak formatı olsun.\n"
+            + "- Kaynaksız hiçbir cümle yazma.\n"
+            + "- İçerik ekleme/çıkarma yapma; sadece formatı düzelt.\n"
+        )
+        answer_retry = _call_local(system_retry, user_message, 0.0).strip()
+        if answer_retry:
+            answer = answer_retry
+            citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+                re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+            )
+
+    # Coverage post-check
+    coverage_actual: Optional[int] = None
+    coverage_ok: Optional[bool] = None
+    if coverage_expected is not None:
+        coverage_actual = _count_answer_items(answer)
+        coverage_ok = coverage_actual >= coverage_expected
+
+        if not coverage_ok and retrieval.evidences and answer.strip() != "Belgede bu bilgi bulunamadı.":
+            system_retry2 = (
+                system
+                + "\n\nKAPSAM DÜZELTME MODU:\n"
+                + f"- Bağlamda {coverage_expected} madde tespit edildi.\n"
+                + f"- Cevabında EN AZ {coverage_expected} madde/satır olmalı.\n"
+                + "- Her maddeyi ayrı satırda ver.\n"
+                + "- Özetleme yapma; bağlamdaki öğeleri tek tek dök.\n"
+                + "- Her satırın sonunda kaynak formatı olsun: [DosyaAdı - Sayfa X]\n"
+            )
+            answer_retry2 = _call_local(system_retry2, user_message, 0.0).strip()
+            if answer_retry2:
+                answer = answer_retry2
+                citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+                    re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+                )
+                coverage_actual = _count_answer_items(answer)
+                coverage_ok = coverage_actual >= coverage_expected
+
+        if not coverage_ok:
+            answer += (
+                f"\n\n⚠️ **Kapsam Uyarısı**: Bağlamda bu bölümde {coverage_expected} "
+                f"madde tespit edildi, ancak cevapta {coverage_actual} madde var. "
+                f"Lütfen cevabı kontrol edin."
+            )
+
+    return GenerationResult(
+        answer=answer,
+        citations_found=citations_found,
+        coverage_expected=coverage_expected,
+        coverage_actual=coverage_actual,
+        coverage_ok=coverage_ok,
+        intent=retrieval.intent,
+        context_preview=context[:500],
+    )
+
+
 # ── Local / extractive generation (LLM-free) ──────────────────────────────
 
 def generate_extractive_answer(

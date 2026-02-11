@@ -100,6 +100,12 @@ class LocalIndex:
             else:
                 self.store.delete_where(where={"$or": [{"doc_id": did} for did in new_doc_ids]})
 
+        # If any of these doc_ids were already indexed, we are REPLACING them.
+        # Chroma is cleaned above; we must also prevent sparse duplicates.
+        already_indexed = set(new_doc_ids) & set(self.allowed_doc_ids)
+        if already_indexed:
+            self.bm25.remove_doc_ids(already_indexed)
+
         # Embed only the NEW chunks.
         embeddings = self.embedder.embed_texts([c.text for c in new_chunks])
         self.store.upsert_chunks(new_chunks, embeddings=embeddings)

@@ -107,6 +107,30 @@ class BM25Index:
         self.bm25 = bm25
         return self
 
+    def remove_doc_ids(self, doc_ids: Set[str]) -> "BM25Index":
+        """
+        Remove all entries belonging to given doc_ids.
+
+        This is used when a document is re-indexed (same doc_id) and we want to
+        avoid accumulating duplicate chunk_ids in the sparse index.
+        """
+        if not doc_ids or not self.ids:
+            return self
+        prefixes = tuple(f"{did}:" for did in sorted(doc_ids) if did)
+        if not prefixes:
+            return self
+
+        keep_ids = [cid for cid in self.ids if not cid.startswith(prefixes)]
+        if len(keep_ids) == len(self.ids):
+            return self
+
+        # Keep token map in sync.
+        self.ids = keep_ids
+        self.tokens_by_id = {cid: self.tokens_by_id[cid] for cid in keep_ids if cid in self.tokens_by_id}
+        corpus = [self.tokens_by_id.get(cid, []) for cid in keep_ids]
+        self.bm25 = BM25Okapi(corpus) if corpus else BM25Okapi([])
+        return self
+
     # ── Persistence ──────────────────────────────────────────────
     def save(self, path: str) -> None:
         """Persist BM25 state to disk (tokens + ids only; BM25Okapi is rebuilt on load)."""

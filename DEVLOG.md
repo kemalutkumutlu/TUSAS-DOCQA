@@ -141,6 +141,26 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
 - `scripts/baseline_gate.py`:
   - Bos/scan-like PDF'lerin crash etmemesi ve mixed-language retrieval icin ek kapilar eklendi.
 
+## Faz 6.5 — Gorsel Ingestion Kalite Iyilestirmeleri (JPG/PNG)
+- Amaç: PDF’teki “stabil metin + yapi korunumu” kalitesini gorsellere yaklastirmak (text-layer olmadigi icin OCR/VLM kritik).
+- `src/core/ingestion.py` (image path):
+  - **EXIF yon duzeltme**: Telefon fotosu / tarama goruntulerinde orientation normalize edilir.
+  - **Kontrollu upscale**: Kucuk goruntuler OCR icin buyutulur (latency patlamasini onlemek icin boyut cap’i var).
+  - **Preprocess varyantlari (Pillow-only)**: grayscale+autocontrast, hafif sharpen ve konservatif threshold denenir.
+  - **Multi-pass OCR**: Birden fazla varyant OCR edilir; cikan metinler arasindan yapi/heading korunumu daha iyi olani secilir.
+  - **VLM ↔ OCR ortak aday secimi**: VLM aciksa (Gemini extract-only) VLM cikarimi da aday listesine girer; yine en-iyi-secim uygulanir.
+- `.env` / config:
+  - `TESSERACT_CONFIG` eklendi (opsiyonel): pytesseract `config=` passthrough (orn. `--psm 6 --oem 3`). Default bos → davranis degismez.
+- Dokumantasyon: `README.md`, `chainlit.md`, `.env.example` guncellendi.
+
+## Faz 6.6 — Ayni Dokumanin Tekrar Yuklenmesi (Skip Reprocess)
+- Amaç: Ayni dosya ayni ayarlarla tekrar yuklendiginde gereksiz OCR/VLM + embedding maliyetini onlemek.
+- `src/core/pipeline.py`:
+  - Ayni oturumda ayni dosya (sha256 `doc_id`) ve ayni ingestion/embedding ayarlari tespit edilirse dokuman **yeniden islenmez**; sadece aktif dokuman olarak set edilir.
+  - Dosya degisirse veya OCR/VLM/embedding ayarlari degisirse yeniden islenir.
+- `src/core/indexing.py` + `src/core/sparse.py`:
+  - Yeniden indeksleme durumunda BM25 (sparse) tarafinda duplicate birikmemesi icin ilgili `doc_id` girdileri temizlenir.
+
 ## Faz 7 — Kalite ve Operasyon Iyilestirmeleri
 
 ### 7.1 — CI / GitHub Actions
@@ -305,6 +325,49 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - "hangi veritabani kullaniliyor" sorgusu cikarildi (Case Study teknik yaklasim bolumunde ChromaDB'den bahsediliyor → LLM bazen meşru olarak cevaplayabiliyor)
 - Yerine tamamen konu disi "mars gezegeninin yuzey sicakligi kac derece" eklendi
 
+## Faz 10 — Tamamen Yerel / Offline Mod (Ollama Entegrasyonu) (2026-02-11)
+
+### 10.1 — Amac
+- Savunma sanayii ve air-gapped ortamlar icin tum RAG pipeline'inin internet baglantisi olmadan calisabilmesi
+- Mevcut mimariye **hicbir breaking change** yapmadan, yeni `LLM_PROVIDER=local` ve `VLM_PROVIDER=local` modlari eklenmesi
+- Ollama uzerinde calisan yerel LLM (text) ve VLM (vision) modelleri ile Gemini API'nin birebir yerine gecmesi
+
+### 10.2 — Teknik Degisiklikler
+- **`src/core/local_llm.py`** (YENi): Ollama HTTP API istemcisi (`/api/generate`). Retry mekanizmasi, vision (base64 image) destegi
+- **`src/core/vlm_extract.py`**: `VLMConfig` genisletildi: `provider` ("gemini"|"local"), `ollama_base_url`, `ollama_vlm_model`, `ollama_timeout` alanlari eklendi. `extract_text_from_image()` artik provider'a gore dispatch eder; `_extract_via_gemini()` ve `_extract_via_ollama()` ayristi. Varsayilan davranis (provider="gemini") degismedi
+- **`src/core/generation.py`**: `generate_answer_local()` ve `generate_chat_answer_local()` fonksiyonlari eklendi. Ayni guardrails/prompts, citation retry, coverage retry mantigi korundu; sadece LLM cagrilari Ollama'ya yonlendirildi
+- **`src/core/pipeline.py`**: `ollama_config` alani eklendi. `ask()` ve `chat()` metodlari `llm_provider == "local"` durumunu handle eder. Build fingerprint'e `vlm_provider` eklendi
+- **`src/config.py`**: `LLMProvider` tipi genisletildi ("local" eklendi). `VLMProvider` tipi eklendi. `Settings`'e Ollama ayarlari eklendi (`ollama_base_url`, `ollama_llm_model`, `ollama_vlm_model`, `ollama_timeout`, `vlm_provider`)
+- **`app.py`**: Local mod icin ozel karsilama mesaji. `OllamaConfig` ve `VLMConfig` provider/ollama alanlari pipeline'a aktarilir
+
+### 10.3 — Mod Yapisi
+| Mod | LLM | VLM | Embedding | Internet |
+|-----|-----|-----|-----------|----------|
+| `gemini` (default) | Gemini API | Gemini API | Lokal ST | Gerekli |
+| `local` | Ollama LLM | Ollama VLM | Lokal ST | Gerekli degil |
+| `none` | Yok | Yok | Lokal ST | Gerekli degil |
+
+### 10.4 — Onerilen Modeller (GTX 1660 Super, 6 GB VRAM)
+- Text LLM: `qwen2.5:7b` (Q4 quantize, ~4.5 GB VRAM)
+- Vision VLM: `llava:7b` (Q4 quantize, ~5 GB VRAM)
+- Not: Ollama modeller arasi dinamik VRAM yonetimi yapar; ayni anda ikisi yuklenmez
+
+### 10.5 — Geriye Uyumluluk
+- Tum yeni alanlar varsayilan degerlere sahip; mevcut `.env` dosyalari ve scriptler **degisiklik gerektirmeden** calisir
+- `LLM_PROVIDER=gemini` (veya bos) default davranisi birebir korunur
+- Baseline gate ve diger LLM-free testler etkilenmez
+
+### 10.6 — Chainlit UI Iyilestirmeleri (Non-invasive)
+- `app.py`:
+  - Karsilama mesajlari: mod rozetleri + hizli aksiyon butonlari (Belge Modu / Sohbet Modu / Debug)
+  - Debug paneli varsayilan kapali; `/debug on|off` veya UI butonu ile acilip kapatilabilir
+  - Cevaplarda ek olarak "Kaynaklar" collapse bolumu (inline citation'lari tekrar listeler)
+  - Durum Paneli: aktif belge / mod / LLM-VLM / toplam chunk bilgisi (tek mesaj guncellenir)
+  - Chat Settings: `VLM_MODE`, `VLM_MAX_PAGES`, `Debug` toggle (session-only)
+  - Coklu belge durumunda tek tikla aktif belge secimi (Action butonlari)
+- `.chainlit/config.toml` + `public/stylesheet.css`:
+  - Basit kurumsal gorunum (dark theme, wide layout, spacing/contrast polish)
+
 ## Sonraki Adimlar
 - ~~Retrieval kalitesi icin mini eval set + metrikler~~ -> TAMAM (Faz 7.2)
 - ~~CI/CD pipeline (GitHub Actions)~~ -> TAMAM (Faz 7.1)
@@ -314,5 +377,6 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - ~~Uctan uca testleri farkli PDF tipleriyle genislet~~ -> TAMAM (Faz 8.2: 8 PDF, 118 sayfa)
 - ~~Halusinasyon testi~~ -> TAMAM (Faz 8.1 + 9.4: 25 soru, %0 halusinasyon)
 - ~~Halusinasyon duzeltmesi~~ -> TAMAM (Faz 9: topic-heading relevance guard)
+- ~~Tamamen yerel/offline mod (Ollama)~~ -> TAMAM (Faz 10)
 - Demo video
 - Reranker (cross-encoder) degerlendirmesi (Roadmap'te)

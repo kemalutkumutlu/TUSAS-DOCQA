@@ -18,12 +18,21 @@ class VLMConfig:
       - "off": never call VLM
       - "auto": call VLM only when text quality is low
       - "force": always call VLM (expensive)
+
+    provider:
+      - "gemini": use Google Gemini API (default, backward compatible)
+      - "local": use local Ollama vision model
     """
 
     api_key: str
     model: str = "gemini-2.0-flash"
     mode: str = "auto"  # off | auto | force
     max_pages: int = 25  # safety cap per document
+    provider: str = "gemini"  # "gemini" | "local"
+    # Ollama settings (only used when provider == "local")
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_vlm_model: str = "llava:7b"
+    ollama_timeout: int = 120
 
 
 _EXTRACT_ONLY_PROMPT = """\
@@ -43,9 +52,17 @@ Rules:
 
 def extract_text_from_image(image: Image.Image, cfg: VLMConfig) -> str:
     """
-    Extract text from an image using a multimodal Gemini model (extract-only).
+    Extract text from an image using a multimodal model (extract-only).
+    Dispatches to Gemini API or local Ollama based on cfg.provider.
     Returns extracted text (may be empty).
     """
+    if cfg.provider == "local":
+        return _extract_via_ollama(image, cfg)
+    return _extract_via_gemini(image, cfg)
+
+
+def _extract_via_gemini(image: Image.Image, cfg: VLMConfig) -> str:
+    """Gemini API path (existing behavior)."""
     # Encode image as PNG bytes
     buf = io.BytesIO()
     image.save(buf, format="PNG")
@@ -55,7 +72,6 @@ def extract_text_from_image(image: Image.Image, cfg: VLMConfig) -> str:
     resp = client.models.generate_content(
         model=cfg.model,
         contents=[
-            # google-genai requires keyword-only args here (positional raises TypeError)
             types.Part.from_text(text=_EXTRACT_ONLY_PROMPT),
             types.Part.from_bytes(data=img_bytes, mime_type="image/png"),
         ],
@@ -65,4 +81,22 @@ def extract_text_from_image(image: Image.Image, cfg: VLMConfig) -> str:
         ),
     )
     return (resp.text or "").strip()
+
+
+def _extract_via_ollama(image: Image.Image, cfg: VLMConfig) -> str:
+    """Local Ollama vision-model path."""
+    from .local_llm import OllamaConfig, ollama_vision_extract
+
+    ollama_cfg = OllamaConfig(
+        base_url=cfg.ollama_base_url,
+        vlm_model=cfg.ollama_vlm_model,
+        timeout=cfg.ollama_timeout,
+    )
+    return ollama_vision_extract(
+        cfg=ollama_cfg,
+        image=image,
+        prompt=_EXTRACT_ONLY_PROMPT,
+        temperature=0.0,
+        max_tokens=4096,
+    )
 

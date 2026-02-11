@@ -70,6 +70,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             lang="tur+eng",
             tesseract_cmd=settings.tesseract_cmd,
             tessdata_prefix=settings.tessdata_prefix,
+            tesseract_config=getattr(settings, "tesseract_config", None),
         ),
         # Match UI default: quality-first VLM is allowed, but ingestion selects best text by dual-quality.
         vlm_config=VLMConfig(api_key=settings.gemini_api_key, model=settings.gemini_model, mode="force"),
