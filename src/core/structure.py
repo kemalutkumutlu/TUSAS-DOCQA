@@ -209,11 +209,33 @@ def build_section_tree(ingest: IngestResult) -> SectionNode:
 
     stack: list[SectionNode] = [root]
     auto_id = 0
+    used_section_ids: set[str] = {"root"}
+    dup_counts: dict[str, int] = {}
 
     def new_unkeyed_id() -> str:
         nonlocal auto_id
         auto_id += 1
         return f"h{auto_id:04d}"
+
+    def unique_section_id(base: str) -> str:
+        """
+        Ensure section_id uniqueness within a document.
+
+        Some PDFs contain repeated numbered headings (or false-positive headings like "2020. ...")
+        on multiple pages. Using the raw heading key as section_id would collide and produce
+        duplicate chunk_ids (Chroma upsert requires unique IDs per batch).
+        """
+        if base not in used_section_ids:
+            used_section_ids.add(base)
+            return base
+        n = dup_counts.get(base, 2)
+        while True:
+            cand = f"{base}__{n:02d}"
+            if cand not in used_section_ids:
+                dup_counts[base] = n + 1
+                used_section_ids.add(cand)
+                return cand
+            n += 1
 
     for ln in lines:
         if ln.text in boilerplate:
@@ -228,7 +250,8 @@ def build_section_tree(ingest: IngestResult) -> SectionNode:
                 stack.pop()
 
             parent = stack[-1]
-            section_id = h.key or new_unkeyed_id()
+            base_id = h.key or new_unkeyed_id()
+            section_id = unique_section_id(base_id)
             heading_path = f"{parent.heading_path} / {h.title}".strip()
             node = SectionNode(
                 section_id=section_id,

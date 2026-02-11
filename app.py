@@ -2,7 +2,7 @@
 Chainlit UI — Document Q&A with Multimodal Hierarchical RAG.
 
 Run:
-    chainlit run app.py -w
+    python -m chainlit run app.py -w
 """
 from __future__ import annotations
 

@@ -18,6 +18,7 @@ Bu komut:
 - `compileall` ile syntax/import kontrolu yapar
 - Sentetik PDF’ler uzerinde ingestion → structure → indexing → retrieval akisini dogrular
 - `section_list` subtree fetch ve coklu-belge izolasyonunu kontrol eder
+- Tekrarlanan numarali basliklarda chunk_id cakismasi olmadan indexlenebildigini dogrular (DuplicateIDError regresyonu)
 
 > Not: GitHub Actions CI icinde bu gate otomatik kosar (Baseline Gate job).
 

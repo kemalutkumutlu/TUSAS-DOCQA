@@ -137,18 +137,18 @@ LLM_PROVIDER=none
 Karmasik PDF layout'lari (tablo, cok kolon, CV vb.) icin sistem sayfa goruntusunden **extract-only**
 metin cikarmak uzere VLM (Gemini multimodal) kullanabilir.
 
-Varsayilan davranis UI ile uyumludur: `VLM_MODE=force` ve `VLM_MAX_PAGES=25`.
+Varsayilan davranis UI ile uyumludur: `VLM_MODE=force` ve `VLM_MAX_PAGES=25` (env ile override edilebilir).
 Isterseniz `.env` icinde degistirebilirsiniz:
 
 ```ini
 VLM_MODE=off
-VLM_MAX_PAGES=25
+VLM_MAX_PAGES=50
 ```
 
 ### 4) Uygulamayi Baslatin
 
 ```bash
-chainlit run app.py -w
+python -m chainlit run app.py -w
 ```
 
 Tarayicida `http://localhost:8000` adresini acin.
@@ -235,7 +235,7 @@ Loglar JSONL formatinda yazilir:
   - Hızlı cozum: farkli portla baslatin:
 
     ```bash
-    chainlit run app.py -w --port 8001
+    python -m chainlit run app.py -w --port 8001
     ```
 
   - Gelistirme kolayligi (onerilen): tab/connection kapaninca process’in otomatik cikmasi icin `.env` icine ekleyin:
@@ -247,6 +247,9 @@ Loglar JSONL formatinda yazilir:
 
 - **HuggingFace symlink uyarisi**: Embedding modeli ilk calistirmada indirilebilir ve Windows’ta symlink desteklenmiyorsa uyarı gorebilirsiniz. Developer Mode acmak veya admin olarak calistirmak uyarıyı azaltır; islevsel olarak calismaya devam eder.
 - **Model 404 / NOT_FOUND**: `GEMINI_MODEL` hesabinizda aktif degilse `.env` icinde `gemini-2.0-flash` gibi daha yaygin bir modele gecin.
+- **`Collection expecting embedding with dimension of 384, got 768`**: Daha once baska bir embedding modeliyle olusturulmus kalici Chroma index'i kullaniyorsunuz (orn. e5-small=384 → e5-base=768). Cozum:
+  - `CHROMA_DIR`'i yeni/bos bir klasore alin (ornegin `CHROMA_DIR=./data/chroma_768`) ve yeniden indeksleyin, veya
+  - `data/chroma/` klasorunu temizleyip yeniden build edin.
 
 ## Proje Yapisi
 

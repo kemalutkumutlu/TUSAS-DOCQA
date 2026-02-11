@@ -14,7 +14,7 @@ GPU kurulumunu CPU ortamindan ayri tutmak (ayri venv) en az sorunlu yaklasimdir.
 ### 1) GPU venv olustur
 
 ```bash
-cd C:\Users\Kemal\Desktop\TUSAS-DOCQA-YENI
+cd <repo_root>
 python -m venv .venv-gpu
 .\.venv-gpu\Scripts\activate
 python -m pip install -U pip
@@ -46,8 +46,12 @@ python -c "import torch; print('torch',torch.__version__); print('torch_cuda',to
 ### Embedding gercekten GPU'da mi?
 
 ```bash
-python -c "from src.core.embedding import Embedder; e=Embedder('intfloat/multilingual-e5-small'); e.embed_query('test'); print('device:', e._model.device)"
+python -c "from src.config import load_settings; from src.core.embedding import Embedder; s=load_settings(); print('selected', s.embedding_model, s.embedding_device); e=Embedder(s.embedding_model, device=s.embedding_device); e.embed_query('test'); print('device:', e._model.device)"
 ```
+
+> Not: Yanlis venv ile calistirmamak icin app'i su sekilde baslatmak en garantisi:
+>
+> `.\.venv-gpu\Scripts\python.exe -m chainlit run app.py -w`
 
 ## Opsiyonel: Embedding device secimi
 

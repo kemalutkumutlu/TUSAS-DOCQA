@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Dict, List, Optional
 
 import chromadb
@@ -41,12 +42,36 @@ class ChromaStore:
         if len(chunks) != len(embeddings):
             raise ValueError("chunks and embeddings must have same length")
         col = self._get_collection()
-        col.upsert(
-            ids=[c.chunk_id for c in chunks],
-            embeddings=embeddings,
-            documents=[c.text for c in chunks],
-            metadatas=[_chunk_metadata(c) for c in chunks],
-        )
+        try:
+            col.upsert(
+                ids=[c.chunk_id for c in chunks],
+                embeddings=embeddings,
+                documents=[c.text for c in chunks],
+                metadatas=[_chunk_metadata(c) for c in chunks],
+            )
+        except Exception as e:  # noqa: BLE001
+            msg = str(e) or e.__class__.__name__
+            if "expecting embedding with dimension" in msg.lower():
+                # Common case when an existing persistent Chroma directory was created with a
+                # different embedding model (e.g., e5-small=384 dims vs e5-base=768 dims).
+                m = re.search(r"dimension of\s+(?P<exp>\d+)\s*,\s*got\s+(?P<got>\d+)", msg, flags=re.IGNORECASE)
+                exp = m.group("exp") if m else "?"
+                got = m.group("got") if m else "?"
+                hint = ""
+                if exp == "384" and got == "768":
+                    hint = " (muhtemelen e5-small -> e5-base gecisi)"
+                elif exp == "768" and got == "384":
+                    hint = " (muhtemelen e5-base -> e5-small gecisi)"
+
+                raise ValueError(
+                    "Embedding boyutu uyusmuyor: mevcut Chroma index'i "
+                    f"{exp} boyut bekliyor, ama bu calistirma {got} boyut uretiyor{hint}.\n\n"
+                    "Cozum (birini secin):\n"
+                    f"- CHROMA_DIR'i yeni/bos bir klasore alin (ornegin `CHROMA_DIR=./data/chroma_{got}`) ve tekrar indeksleyin\n"
+                    "- veya mevcut index'i silip yeniden olusturun (ornegin `data/chroma/` klasorunu temizleyin)\n"
+                    "- veya EMBEDDING_MODEL'i eski modele geri alin (index ile ayni boyuta gelecek sekilde)\n"
+                ) from e
+            raise
 
     def query(
         self,

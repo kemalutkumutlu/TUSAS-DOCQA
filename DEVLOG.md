@@ -208,6 +208,7 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 | Gemini 503/429 gecici hatalar | Eval script'ler fail | Exponential backoff retry (4 deneme) |
 | Port 8000 cakismasi (Windows) | Gelistirme akisi bozuluyor | `AUTO_EXIT_ON_NO_CLIENTS` opsiyonel hook |
 | VLM heading regresyonu | VLM force modunda heading kaybi | Dual-quality secim: PDF/OCR/VLM arasinda en iyi yapi secilir |
+| Tekrarlanan numarali basliklar (section_id cakismasi) | Index build crash (Chroma DuplicateIDError) | Section ID'leri dokuman icinde unique hale getirildi (suffix) |
 
 ## Zaman Dagilimi (Tahmini)
 

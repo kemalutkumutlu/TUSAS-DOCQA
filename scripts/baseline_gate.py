@@ -15,6 +15,7 @@ Run:
 import sys
 import tempfile
 from pathlib import Path
+import re
 
 
 def _setup_utf8() -> None:
@@ -99,7 +100,9 @@ def main() -> int:
     # 1) Syntax/import sanity: compileall
     import compileall
 
-    if not compileall.compile_dir(str(repo_root), quiet=1):
+    # Avoid compiling virtualenvs / large generated folders (keeps gate fast locally).
+    skip_rx = re.compile(r"(\\|/)(\.venv(-gpu)?|data|\.git)(\\|/)")
+    if not compileall.compile_dir(str(repo_root), quiet=1, rx=skip_rx):
         return _fail("compileall failed")
     _ok("compileall")
 
@@ -147,6 +150,41 @@ def main() -> int:
         if not st0.warnings or not st1.warnings:
             return _fail("expected warnings for empty/scan-like ingestion")
         _ok("empty/scan-like PDFs do not crash (no index)")
+
+        # 2.5) Repeated numbered headings should not crash indexing (unique chunk_ids)
+        # Some real PDFs repeat the same numbered heading across pages (or contain false-positives),
+        # which used to produce duplicate chunk IDs and crash Chroma upsert.
+        dup_heading = tmp / "dup_heading.pdf"
+        _make_pdf(
+            dup_heading,
+            pages=[
+                [
+                    "2020. SECTION TITLE",
+                    "First occurrence body line 1.",
+                    "First occurrence body line 2.",
+                ],
+                [
+                    "2020. SECTION TITLE",
+                    "Second occurrence body line 1.",
+                    "Second occurrence body line 2.",
+                ],
+            ],
+        )
+        pipe_dup = RAGPipeline(
+            embedding_model="intfloat/multilingual-e5-small",
+            chroma_dir=tmp / "chroma_dup",
+            gemini_api_key="",  # LLM-free gate
+            gemini_model="gemini-2.0-flash",
+            ocr_config=OCRConfig(enabled=False, lang="tur+eng"),
+            vlm_config=VLMConfig(api_key="", model="gemini-2.0-flash", mode="off", max_pages=0),
+        )
+        st_dup = pipe_dup.add_document(dup_heading, display_name=dup_heading.name)
+        ids = [c.chunk_id for c in st_dup.chunks]
+        if len(ids) != len(set(ids)):
+            return _fail("expected unique chunk_ids for repeated headings")
+        if st_dup.chunks and not pipe_dup.has_index:
+            return _fail("expected an index when chunks exist")
+        _ok("repeated headings do not crash (unique chunk_ids)")
 
         # 3) Core RAG plumbing (LLM-free): ingestion → structure → chunking → index → retrieval
 

@@ -43,7 +43,20 @@ class LocalIndex:
         collection_name: str = "chunks",
     ) -> "LocalIndex":
         embedder = Embedder(model_name=embedding_model, device=embedding_device)  # type: ignore[arg-type]
-        store = ChromaStore(persist_dir=str(chroma_dir), collection_name=collection_name)
+        # Embed first so we can derive embedding dimension deterministically.
+        embeddings = embedder.embed_texts([c.text for c in chunks])
+        emb_dim = len(embeddings[0]) if embeddings else 0
+
+        # Automation: avoid "384 vs 768" dimension mismatches when reusing the same persistent
+        # CHROMA_DIR with a different embedding model (e.g. e5-small vs e5-base).
+        #
+        # If caller didn't explicitly override the collection name (default "chunks"),
+        # namespace the collection by embedding dimension.
+        collection_name_use = collection_name
+        if collection_name == "chunks" and emb_dim:
+            collection_name_use = f"chunks_d{emb_dim}"
+
+        store = ChromaStore(persist_dir=str(chroma_dir), collection_name=collection_name_use)
 
         # Prevent stale chunks accumulating for the same doc_id(s) in the persistent store.
         doc_ids = sorted({c.doc_id for c in chunks})
@@ -53,8 +66,7 @@ class LocalIndex:
             else:
                 store.delete_where(where={"$or": [{"doc_id": did} for did in doc_ids]})
 
-        # Embed + upsert all chunks (parents + children)
-        embeddings = embedder.embed_texts([c.text for c in chunks])
+        # Upsert all chunks (parents + children)
         store.upsert_chunks(chunks, embeddings=embeddings)
 
         bm25 = BM25Index.build(chunks)
