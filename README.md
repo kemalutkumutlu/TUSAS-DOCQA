@@ -209,13 +209,13 @@ Avg Latency     : 29 ms
 python scripts/hallucination_test.py --pdf test_data/Case_Study_20260205.pdf
 ```
 
-Son calistirma sonuclari (2026-02-11):
+Son calistirma sonuclari (2026-02-11, Faz 9 — confidence guard sonrasi):
 
 | Metrik | Deger |
 |--------|-------|
 | Pozitif dogru yanit | 10/10 (100%) |
-| Negatif dogru red | 14/15 (93%) |
-| Halusinasyon orani | 1/15 (7%) |
+| Negatif dogru red | **15/15 (100%)** |
+| Halusinasyon orani | **0/15 (0%)** |
 | Citation uyumu | 10/10 (100%) |
 
 ### (Opsiyonel) Test klasoru + loglama (onerilen)

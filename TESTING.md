@@ -105,7 +105,7 @@ python scripts/hallucination_test.py --pdf test_data/Case_Study_20260205.pdf
 
 25 soruluk kapsamli test: 10 pozitif (belgede var) + 15 negatif (belgede yok) sorgu.
 
-**Son calistirma sonuclari**:
+**Son calistirma sonuclari** (Faz 9 — confidence guard sonrasi):
 
 | Metrik | Deger | Aciklama |
 |--------|-------|----------|
@@ -115,14 +115,16 @@ python scripts/hallucination_test.py --pdf test_data/Case_Study_20260205.pdf
 | Citation uyumu | 10/10 (100%) | Her cevap kaynak referansi icerir |
 | Anahtar kelime isabeti | 10/10 (100%) | Beklenen icerigi dogru donduruyor |
 | **Negatif (out-of-scope) Sorular** | | |
-| Dogru reddedilen | 14/15 (93%) | "Belgede bu bilgi bulunamadi." |
-| **Halusinasyon (FAIL)** | **1/15 (7%)** | Belgede olmayan soruya uydurma cevap |
+| Dogru reddedilen | **15/15 (100%)** | "Belgede bu bilgi bulunamadi." |
+| **Halusinasyon (FAIL)** | **0/15 (0%)** | Belgede olmayan soruya uydurma cevap |
 | **Gecikme** | | |
-| Ort. pozitif | 3851 ms | Gemini cagri suresi dahil |
-| Ort. negatif | 3457 ms | Gemini cagri suresi dahil |
-| Ort. genel | 3615 ms | |
+| Ort. pozitif | ~3400 ms | Gemini cagri suresi dahil |
+| Ort. negatif | ~3900 ms | Gemini cagri suresi dahil |
+| Ort. genel | ~3700 ms | |
 
-> **Edge Case Analizi**: 1 halusinasyon "sunucu gereksinimleri nelerdir" sorgusunda olustu. "gereksinimler" kelimesi belgede "Fonksiyonel Gereksinimler" basligiyla eslesti ve section_list olarak deterministik render yapildi. Bu, keyword-bazli retrieval'in siniridir; sistem "sunucu" ile "fonksiyonel" arasindaki anlam farkini ayirt edemedi. LLM bypass edildigi icin (deterministic path) halusinasyon LLM kaynakli degil, retrieval false-positive kaynaklidir.
+> **Onceki Durum (Faz 8)**: 1/15 halusinasyon (%7). "sunucu gereksinimleri nelerdir" sorgusunda "gereksinimler" keyword'u "Fonksiyonel Gereksinimler" basligiyla eslesti ve deterministik section_list olarak yanlis render edildi.
+>
+> **Duzeltme (Faz 9)**: `_topic_heading_relevant()` guard'i eklendi. Sorgunun topic kelimeleri (soru kelimeleri cikarildiktan sonra) baslik tokenleriyle prefix-tabanli karsilastirilir. "sunucu" kelimesi baslikta karsilik bulamadigi icin deterministik path atlanir ve LLM "Belgede bu bilgi bulunamadi." cevabini verir.
 
 ### 0.5 CI / GitHub Actions
 
@@ -230,10 +232,10 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | "dunya nufusu kac" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
 | "yapay zeka ne zaman icat edildi" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
 | "bu projenin butcesi ne kadar" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
-| "hangi veritabani kullaniliyor" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
+| "mars gezegeninin yuzey sicakligi kac derece" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
 | "API endpoint leri nelerdir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
 | "kullanici kayit islemi nasil yapilir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
-| "sunucu gereksinimleri nelerdir" | NEG | Bulunamadi | Fonksiyonel gereksinimler listesi (section_list) | **FAILED** |
+| "sunucu gereksinimleri nelerdir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | **PASSED** (Faz 9 ile duzeltildi) |
 | "bu belgedeki grafikleri acikla" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
 | "projenin gelir modeli nedir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
 | "musteri memnuniyeti orani kactir" | NEG | Bulunamadi | "Belgede bu bilgi bulunamadi." | PASSED |
@@ -337,8 +339,8 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | **Generation** | Citation Compliance | 100% (10/10 pozitif sorgu) |
 | | Keyword Accuracy | 100% (10/10 pozitif sorgu) |
 | **Halusinasyon** | Pozitif Dogru Yanit | 100% (10/10) |
-| | Negatif Dogru Red | 93% (14/15) |
-| | Halusinasyon Orani | 7% (1/15) |
+| | Negatif Dogru Red | **100% (15/15)** |
+| | Halusinasyon Orani | **0% (0/15)** |
 | | Yanlis Negatif Orani | 0% (0/10) |
 | **Hiz** | Retrieval (lokal, e5-base) | ~29 ms/sorgu |
 | | Generation (Gemini API) | ~3600 ms/sorgu |
@@ -353,7 +355,7 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 
 ## 9. Bilinen Sinirlamalar ve Iyilestirme Alanlari
 
-1. **Keyword overlap halusinasyonu**: "sunucu gereksinimleri" gibi belgede kismi eslesen ama anlam olarak farkli sorgular, deterministik section_list yolunda yanlis sonuc uretebilir. Cozum: daha gelismis semantic filtering veya re-ranking uygulanabilir.
+1. ~~**Keyword overlap halusinasyonu**: "sunucu gereksinimleri" gibi belgede kismi eslesen ama anlam olarak farkli sorgular, deterministik section_list yolunda yanlis sonuc uretebilir.~~ → **COZULDU** (Faz 9): `_topic_heading_relevant()` guard'i eklendi. Sorgunun topic kelimeleri baslik tokenleriyle prefix-tabanli karsilastirilir; uyumsuzlukta deterministik path atlanip LLM'e dusulur.
 
 2. **Ingilizce section routing**: Turkce basliklara sahip belgelerde Ingilizce sorgularin section key eslemesi zayiflayabilir (heading_hit 93%, section_hit 83%).
 

@@ -130,6 +130,86 @@ def _heading_query_overlap(heading_path: str, query: str) -> float:
     return len(overlap) / len(q_tokens)
 
 
+# ── Heading–query topic relevance (confidence guard) ─────────────────────────
+
+# Common Turkish/English question and structural words that should NOT
+# count as "topic" words when checking heading relevance.
+_QUESTION_WORDS: Set[str] = {
+    # Turkish
+    "nelerdir", "nedir", "nelerden", "nelerini", "nelerle",
+    "listele", "listesi", "sirala",
+    "kaç", "kac", "kadar",
+    "nasıl", "nasil", "neden", "niçin", "nicin",
+    "hepsini", "tamamını", "tamamini", "tümünü", "tumunu",
+    "neler", "hangi", "hangisi", "hangileri",
+    "mi", "mu",
+    # English
+    "what", "list", "all", "every", "how", "enumerate", "are", "the",
+    "is", "which", "many", "much",
+}
+
+
+def _topic_heading_relevant(query: str, heading_path: str, min_prefix: int = 5) -> bool:
+    """
+    Check that the query's **topic words** have meaningful lexical overlap
+    with the section heading.
+
+    Uses prefix-based matching (minimum *min_prefix* shared leading chars)
+    to tolerate Turkish morphological suffixes
+    (e.g. "gereksinimleri" ≈ "gereksinimler").
+
+    Returns ``True`` (= pass) when the heading is missing/short, when the
+    query has no extractable topic words, or when **all** topic words match
+    a heading token.  Returns ``False`` only when at least one topic word
+    has **no** counterpart in the heading, indicating a likely keyword
+    false-positive.
+    """
+    # Strip the file-name prefix:
+    #   "Case_Study.pdf / 2. Heading / 2.1 Sub"  →  "2. Heading / 2.1 Sub"
+    heading = heading_path
+    if " / " in heading:
+        heading = heading.split(" / ", 1)[1]
+    heading = (heading or "").strip()
+    if len(heading) < 3:
+        return True  # too short to compare meaningfully
+
+    q_tokens = _tokenize_simple(query)
+    h_tokens = _tokenize_simple(heading)
+    if not q_tokens or not h_tokens:
+        return True
+
+    # Keep only topic words (remove question / structural words + very
+    # short tokens that are likely suffixes / noise).
+    topic = {t for t in q_tokens if t not in _QUESTION_WORDS and len(t) > 2}
+    if not topic:
+        return True  # query is all question words → don't filter
+
+    # Check every topic word for a match in the heading.
+    for qt in topic:
+        found = False
+        for ht in h_tokens:
+            # 1) Exact match
+            if qt == ht:
+                found = True
+                break
+            # 2) Prefix match (handles Turkish suffixes)
+            pfx = min(min_prefix, min(len(qt), len(ht)))
+            if pfx >= 4:
+                common = 0
+                for i in range(min(len(qt), len(ht))):
+                    if qt[i] == ht[i]:
+                        common += 1
+                    else:
+                        break
+                if common >= pfx:
+                    found = True
+                    break
+        if not found:
+            return False  # at least one topic word has no heading counterpart
+
+    return True
+
+
 def _pick_best_section(
     got_ids: List[str],
     got_metas: List[dict],
@@ -426,33 +506,52 @@ def retrieve(
 
         if best:
             best_doc_id, best_section_id = best
-            # Complete section + subtree fetch
-            section_evidences = _fetch_section_and_subtree(
-                index,
-                best_doc_id,
-                best_section_id,
-                max_depth=_section_fetch_max_depth(),
-            )
 
-            # Coverage info from the parent chunk text
-            coverage = None
-            for ev in section_evidences:
-                if ev.kind == "parent" and ev.section_id == best_section_id:
-                    n = _count_list_items(ev.text)
-                    if n > 0:
-                        coverage = CoverageInfo(
-                            expected_items=n,
-                            heading_path=ev.heading_path,
-                            section_id=ev.section_id,
-                        )
+            # ── Confidence guard ─────────────────────────────────────
+            # Verify that the query topic semantically matches the
+            # selected section heading.  Low similarity indicates a
+            # keyword false-positive (e.g. "sunucu gereksinimleri"
+            # matched "Fonksiyonel Gereksinimler" via the shared
+            # stem "gereksinim").
+            #
+            # When confidence is low we skip the deterministic section
+            # fetch and fall through to the normal-QA / LLM path,
+            # which can decide "Belgede bu bilgi bulunamadı."
+            heading_path_str = ""
+            for meta in got_metas:
+                if meta.get("section_id") == best_section_id and meta.get("heading_path"):
+                    heading_path_str = meta["heading_path"]
                     break
 
-            return RetrievalResult(
-                intent=intent,
-                evidences=section_evidences,
-                section_complete=True,
-                coverage=coverage,
-            )
+            if _topic_heading_relevant(query, heading_path_str):
+                # High confidence → complete section + subtree fetch
+                section_evidences = _fetch_section_and_subtree(
+                    index,
+                    best_doc_id,
+                    best_section_id,
+                    max_depth=_section_fetch_max_depth(),
+                )
+
+                # Coverage info from the parent chunk text
+                coverage = None
+                for ev in section_evidences:
+                    if ev.kind == "parent" and ev.section_id == best_section_id:
+                        n = _count_list_items(ev.text)
+                        if n > 0:
+                            coverage = CoverageInfo(
+                                expected_items=n,
+                                heading_path=ev.heading_path,
+                                section_id=ev.section_id,
+                            )
+                        break
+
+                return RetrievalResult(
+                    intent=intent,
+                    evidences=section_evidences,
+                    section_complete=True,
+                    coverage=coverage,
+                )
+            # else: low confidence → fall through to normal-QA evidence
 
     # Normal QA: return hybrid top-k evidence
     evidences: List[Evidence] = []

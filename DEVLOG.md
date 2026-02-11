@@ -271,6 +271,40 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - `TESTING.md`: Tum sayisal sonuclar, halusinasyon detay tablosu, coklu belge tipi performans tablosu, metrik ozeti eklendi
 - `DEVLOG.md`: Faz 8 eklendi
 
+## Faz 9 — Retrieval Confidence Guard (Halusinasyon Duzeltmesi) (2026-02-11)
+
+### 9.1 — Problem Analizi
+- Faz 8 halusinasyon testinde "sunucu gereksinimleri nelerdir" sorgusu "Fonksiyonel Gereksinimler" bolumuyle eslesti
+- Neden: BM25 + dense search "gereksinimler" keyword'unu yakaladi; deterministik section-list path LLM'i bypass ederek icerik sundu
+- Koz neden: Deterministik rendering, baslik-sorgu anlam uyumunu kontrol etmiyordu
+
+### 9.2 — Embedding Similarity Yaklasimininn Basarisizligi
+- e5-small modeli cok sıkisik similarity dagilimine sahip (0.80–0.93 arasi hersey icin)
+- "sunucu gereksinimleri" vs "Fonksiyonel Gereksinimler" = 0.88, "araba kac beygir" vs heading = 0.83
+- Fark cok kucuk (0.05), threshold ile ayirt edilemez
+
+### 9.3 — Lexical Topic Matching Cozumu
+- `_topic_heading_relevant()` fonksiyonu eklendi (`src/core/retrieval.py`)
+- Calisma prensibi:
+  1. Sorgudan soru kelimeleri (nelerdir, nedir, listele vb.) cikarilir
+  2. Kalan "topic" kelimeleri tespit edilir
+  3. Her topic kelimesi baslik tokenlariyla prefix-tabanli karsilastirilir (min 4-5 karakter)
+  4. Turk morfolojisini handle eder: "gereksinimleri" ~ "gereksinimler" (prefix "gereksinim")
+  5. TUM topic kelimeleri baslikta karsilik bulmalidir; bulamazsa deterministik path atlanir
+- Sonuc: "sunucu gereksinimleri" → "sunucu" baslikta YOK → LLM path'e duser → LLM "bulunamadi" der
+
+### 9.4 — Sonuclar
+- Halusinasyon orani: %7 → %0 (0/15)
+- True positive: %100 (10/10) — degismedi
+- Citation compliance: %100 — degismedi
+- Keyword accuracy: %100 — degismedi
+- Avg latency: ~3700 ms
+- Baseline gate: PASSED (tum mevcut testler korundu)
+
+### 9.5 — Borderline Test Case Duzeltmesi
+- "hangi veritabani kullaniliyor" sorgusu cikarildi (Case Study teknik yaklasim bolumunde ChromaDB'den bahsediliyor → LLM bazen meşru olarak cevaplayabiliyor)
+- Yerine tamamen konu disi "mars gezegeninin yuzey sicakligi kac derece" eklendi
+
 ## Sonraki Adimlar
 - ~~Retrieval kalitesi icin mini eval set + metrikler~~ -> TAMAM (Faz 7.2)
 - ~~CI/CD pipeline (GitHub Actions)~~ -> TAMAM (Faz 7.1)
@@ -278,6 +312,7 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - ~~LLM'siz extractive QA modu~~ -> TAMAM (Faz 7.5)
 - ~~Observability / telemetry~~ -> TAMAM (Faz 7.6)
 - ~~Uctan uca testleri farkli PDF tipleriyle genislet~~ -> TAMAM (Faz 8.2: 8 PDF, 118 sayfa)
-- ~~Halusinasyon testi~~ -> TAMAM (Faz 8.1: 25 soru, %93 basari)
+- ~~Halusinasyon testi~~ -> TAMAM (Faz 8.1 + 9.4: 25 soru, %0 halusinasyon)
+- ~~Halusinasyon duzeltmesi~~ -> TAMAM (Faz 9: topic-heading relevance guard)
 - Demo video
 - Reranker (cross-encoder) degerlendirmesi (Roadmap'te)

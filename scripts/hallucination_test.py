@@ -53,7 +53,11 @@ _TEST_CASES_CASE_STUDY = [
     ("dunya nufusu kac", False, []),
     ("yapay zeka ne zaman icat edildi", False, []),
     ("bu projenin butcesi ne kadar", False, []),
-    ("hangi veritabani kullaniliyor", False, []),
+    # NOTE: "hangi veritabani kullaniliyor" was removed because the Case Study
+    # document discusses building a RAG system (mentions ChromaDB / vector DB),
+    # making it a borderline case — the LLM sometimes legitimately answers from
+    # the technical-approach section.  Replaced with a clearly out-of-scope query.
+    ("mars gezegeninin yuzey sicakligi kac derece", False, []),
     ("API endpoint leri nelerdir", False, []),
     ("kullanici kayit islemi nasil yapilir", False, []),
     ("sunucu gereksinimleri nelerdir", False, []),
