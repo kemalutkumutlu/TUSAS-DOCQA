@@ -224,20 +224,11 @@ Tarayicida `http://localhost:8000` adresini acin.
 - Belge olmadan sohbet icin: `/chat`
 - Belge sorulari icin: `/doc`
 - Birden fazla belge varsa aktif belge secmek icin: `/use <dosya>`
-- Debug panelini ac/kapatmak icin: `/debug on|off` (varsayilan: kapali)
 - Ayni dosyayi (icerik ayni) **ayni oturumda** tekrar yuklerseniz sistem yeniden OCR/VLM + embedding yapmaz; sadece dokumani aktif hale getirir (hizli). Dosya degisirse veya OCR/VLM ayarlari degisirse yeniden islenir.
 
-### UI (Chainlit) Ozellestirme
+### UI (Chainlit)
 
-- `app.py`:
-  - hizli aksiyon butonlari (Belge Modu / Sohbet Modu / Debug)
-  - coklu belge icin tek tikla aktif belge secimi (Action butonlari)
-  - **Durum Paneli**: aktif belge / mod / LLM-VLM / toplam chunk bilgisi (mesaj update ile spam yapmaz)
-  - dosya yukleme sonunda sure bilgisi (indexleme gecikmelerini anlamak icin)
-  - Chat Settings: `VLM_MODE`, `VLM_MAX_PAGES`, `Debug` toggle (session-only)
-- `.chainlit/config.toml`: UI adi, layout, CoT gizleme (`cot=hidden`) ve custom CSS
-- `public/stylesheet.css`: hafif kurumsal tema iyilestirmesi (non-invasive)
-- `public/theme.json`: UI tema override (font + radius + palette)
+- Varsayilan Chainlit arayuzu kullanilir. Dil ve sidebar ayarlari `.chainlit/config.toml` ile degistirilebilir.
 
 ### Mod Davranisi (Kisa)
 

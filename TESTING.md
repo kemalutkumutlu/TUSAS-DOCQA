@@ -259,8 +259,8 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | Coklu dosya | 2+ dosya yukleme | Hepsi indekslenir | PASSED (UI kodu) |
 | Ayni dosya tekrar yukleme | Aynı PDF/PNG/JPG dosyasini ayni oturumda tekrar yukle | Yeniden indekslemez; sadece aktif dokuman olur (hizli) | PASSED (session-level doc_id + ayar fingerprint skip) |
 | Local (Ollama) mod | `.env`: `LLM_PROVIDER=local`, `VLM_PROVIDER=local`, Ollama calisiyor | Karsilama mesajinda "Local (Offline) Mod" gosterilir; soru sorulabilir, cevap Ollama'dan alinir | PASSED |
-| Debug paneli | `/debug on|off` veya UI butonu | Debug (intent/citation/coverage) sadece aciksa gosterilir | PASSED (toggle) |
-| Coklu belge tek tik secim | 2+ belge yukle | UI action butonlariyla aktif belge secilebilir | PASSED |
+| Debug paneli | Her cevapta | Debug (intent/citation/coverage) her zaman &lt;details&gt; icinde gosterilir | PASSED |
+| Coklu belge secim | 2+ belge yukle | `/use <dosya>` ile aktif belge secilir | PASSED |
 | Hata durumu | API key eksik | Uyari mesaji | PASSED (UI kodu) |
 | Uygulama baslangici | Uygulama acilir acilmaz | Upload zorunlu degil; mesaj yazilabilir | PASSED |
 | Bos belge (doc modu) | Belge yuklemeden belge sorusu | "Henuz belge yuklenmedi..." | PASSED (UI kodu) |

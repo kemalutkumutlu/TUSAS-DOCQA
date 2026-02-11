@@ -11,11 +11,9 @@ import os
 import re
 import shutil
 import tempfile
-import time
 from pathlib import Path
 
 import chainlit as cl
-from chainlit.input_widget import Select, Slider, Switch
 
 from src.config import load_settings
 from src.core.ingestion import OCRConfig
@@ -25,98 +23,6 @@ from src.core.vlm_extract import VLMConfig
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-
-# UI state keys (stored in Chainlit user_session)
-_K_MODE = "mode"  # "doc" | "chat"
-_K_SHOW_DEBUG = "show_debug"  # bool
-_K_STATUS_MSG = "status_msg"  # cl.Message
-_K_CHAT_SETTINGS = "chat_settings"  # dict
-
-
-def _bool(v: object, default: bool = False) -> bool:
-    if v is None:
-        return default
-    if isinstance(v, bool):
-        return v
-    s = str(v).strip().lower()
-    if s in ("1", "true", "yes", "y", "on"):
-        return True
-    if s in ("0", "false", "no", "n", "off"):
-        return False
-    return default
-
-
-def _ui_badges(settings) -> str:
-    """
-    Return a compact, user-friendly status line for the current runtime mode.
-    Purely presentational (no logic).
-    """
-    llm = getattr(settings, "llm_provider", "none")
-    vlm = getattr(settings, "vlm_provider", "gemini")
-    emb_dev = getattr(settings, "embedding_device", "auto")
-    if llm == "local":
-        return (
-            f"**Çalışma Modu**: **Local (Offline)**\n"
-            f"- **LLM**: Ollama `{settings.ollama_llm_model}`\n"
-            f"- **VLM**: {('Ollama `' + settings.ollama_vlm_model + '`') if vlm == 'local' else 'Kapalı/Gemini'}\n"
-            f"- **Embedding**: `{settings.embedding_model}` / `{emb_dev}`\n"
-        )
-    if llm == "none":
-        return (
-            "**Çalışma Modu**: **Extractive** (LLM devre dışı)\n"
-            f"- **Embedding**: `{settings.embedding_model}` / `{emb_dev}`\n"
-        )
-    # default: gemini/openai
-    return (
-        "**Çalışma Modu**: **Online**\n"
-        f"- **LLM**: `{llm}`\n"
-        f"- **VLM**: `{vlm}` (mode={getattr(settings, 'vlm_mode', 'auto')})\n"
-        f"- **Embedding**: `{settings.embedding_model}` / `{emb_dev}`\n"
-    )
-
-
-def _base_actions() -> list[cl.Action]:
-    """Global, safe actions (no side effects besides session state changes)."""
-    return [
-        cl.Action(
-            name="set_mode",
-            icon="file-text",
-            payload={"mode": "doc"},
-            label="Belge Modu",
-        ),
-        cl.Action(
-            name="set_mode",
-            icon="messages-square",
-            payload={"mode": "chat"},
-            label="Sohbet Modu",
-        ),
-        cl.Action(
-            name="toggle_debug",
-            icon="bug",
-            payload={},
-            label="Debug Aç/Kapat",
-        ),
-    ]
-
-
-def _doc_actions(pipeline: RAGPipeline) -> list[cl.Action]:
-    """One-click document selection actions."""
-    acts: list[cl.Action] = []
-    if not pipeline or not pipeline.has_documents:
-        return acts
-    for name in pipeline.list_documents():
-        if not name:
-            continue
-        acts.append(
-            cl.Action(
-                name="use_doc",
-                icon="file",
-                payload={"name": name},
-                label=name if len(name) <= 38 else (name[:35] + "…"),
-            )
-        )
-    return acts
-
 
 # Auto-exit (dev convenience): if enabled, kill the server when the last client disconnects.
 # This prevents "port already in use" when you close the browser tab but forget the terminal.
@@ -333,92 +239,6 @@ def _get_pipeline() -> RAGPipeline:
     return pipeline
 
 
-def _render_status(settings, pipeline: RAGPipeline | None) -> str:
-    mode = cl.user_session.get(_K_MODE) or "doc"
-    show_debug = _bool(cl.user_session.get(_K_SHOW_DEBUG), default=False)
-    active = pipeline.active_document_name if pipeline else None
-    doc_count = pipeline.document_count if pipeline else 0
-    total_chunks = pipeline.total_chunks if pipeline else 0
-    llm = getattr(settings, "llm_provider", "none")
-    vlm_provider = getattr(settings, "vlm_provider", "gemini")
-    vlm_mode = getattr(settings, "vlm_mode", "auto")
-    vlm_max = getattr(settings, "vlm_max_pages", 0)
-
-    lines = [
-        "### Durum Paneli",
-        f"- **Mod**: `{mode}`",
-        f"- **Debug**: **{('AÇIK' if show_debug else 'KAPALI')}**",
-        f"- **LLM**: `{llm}`",
-        f"- **VLM**: `{vlm_provider}` (mode=`{vlm_mode}`, max_pages=`{vlm_max}`)",
-        f"- **Aktif Belge**: **{active or '(yok)'}**",
-        f"- **Belgeler**: {doc_count}",
-        f"- **Toplam Chunk**: {total_chunks}",
-    ]
-    return "\n".join(lines)
-
-
-async def _ensure_status_message(settings, pipeline: RAGPipeline | None) -> None:
-    """
-    Keep a single status panel message updated (avoid chat spam).
-    """
-    content = _render_status(settings, pipeline)
-    msg: cl.Message | None = cl.user_session.get(_K_STATUS_MSG)
-    if msg is None:
-        msg = cl.Message(content=content, actions=_base_actions())
-        await msg.send()
-        cl.user_session.set(_K_STATUS_MSG, msg)
-        return
-    try:
-        msg.content = content
-        msg.actions = _base_actions()
-        await msg.update()
-    except Exception:
-        # Fallback: send a new one if update fails
-        msg2 = cl.Message(content=content, actions=_base_actions())
-        await msg2.send()
-        cl.user_session.set(_K_STATUS_MSG, msg2)
-
-
-@cl.action_callback("set_mode")
-async def _on_set_mode(action: cl.Action) -> None:
-    mode = (action.payload or {}).get("mode") or "doc"
-    mode = "chat" if str(mode).strip().lower() == "chat" else "doc"
-    cl.user_session.set(_K_MODE, mode)
-    await cl.Message(
-        content=("Sohbet moduna geçildi." if mode == "chat" else "Belge moduna geçildi."),
-        actions=_base_actions(),
-    ).send()
-    settings = load_settings()
-    pipeline: RAGPipeline | None = cl.user_session.get("pipeline")
-    await _ensure_status_message(settings, pipeline)
-
-
-@cl.action_callback("toggle_debug")
-async def _on_toggle_debug(action: cl.Action) -> None:
-    cur = _bool(cl.user_session.get(_K_SHOW_DEBUG), default=False)
-    cl.user_session.set(_K_SHOW_DEBUG, not cur)
-    await cl.Message(
-        content=f"Debug modu: **{('AÇIK' if not cur else 'KAPALI')}**",
-        actions=_base_actions(),
-    ).send()
-    settings = load_settings()
-    pipeline: RAGPipeline | None = cl.user_session.get("pipeline")
-    await _ensure_status_message(settings, pipeline)
-
-
-@cl.action_callback("use_doc")
-async def _on_use_doc(action: cl.Action) -> None:
-    pipeline = _get_pipeline()
-    name = (action.payload or {}).get("name") or ""
-    ok = pipeline.set_active_document(str(name))
-    if ok:
-        await cl.Message(content=f"Aktif belge ayarlandı: **{pipeline.active_document_name or name}**").send()
-    else:
-        await cl.Message(content=f"Belge bulunamadı: **{name}**").send()
-    settings = load_settings()
-    await _ensure_status_message(settings, pipeline)
-
-
 async def _process_uploaded_file(file_path: str, file_name: str) -> str:
     """
     Ingest a single uploaded file into the pipeline.
@@ -428,15 +248,12 @@ async def _process_uploaded_file(file_path: str, file_name: str) -> str:
     path = Path(file_path)
 
     try:
-        t0 = time.perf_counter()
         state = pipeline.add_document(path, display_name=file_name)
-        elapsed = time.perf_counter() - t0
         lines = [
             f"**{file_name}** basariyla yuklendi ve indekslendi.",
             f"- Sayfa sayisi: {state.page_count}",
             f"- Chunk sayisi: {len(state.chunks)}",
             f"- Toplam indekslenen chunk: {pipeline.total_chunks}",
-            f"- Sure: {elapsed:.1f}s",
         ]
         if state.warnings:
             lines.append(f"- Uyarilar: {'; '.join(state.warnings)}")
@@ -450,10 +267,7 @@ async def _process_uploaded_file(file_path: str, file_name: str) -> str:
 @cl.on_chat_start
 async def on_chat_start():
     settings = load_settings()
-    cl.user_session.set(_K_MODE, "doc")
-    # Default: keep debug hidden unless user turns it on.
-    if cl.user_session.get(_K_SHOW_DEBUG) is None:
-        cl.user_session.set(_K_SHOW_DEBUG, False)
+    cl.user_session.set("mode", "doc")
 
     # Track active sessions for optional auto-exit behavior.
     async with _EXIT_LOCK:
@@ -467,87 +281,42 @@ async def on_chat_start():
             )
 
     if settings.llm_provider == "local":
-        # Chat settings panel (session-only) for UX + speed controls.
-        await cl.ChatSettings(
-            [
-                Select(
-                    id="VLM_MODE",
-                    label="VLM Mode (hız/kalite)",
-                    values=["off", "auto", "force"],
-                    initial_index=["off", "auto", "force"].index(getattr(settings, "vlm_mode", "auto"))
-                    if getattr(settings, "vlm_mode", "auto") in ("off", "auto", "force")
-                    else 1,
-                ),
-                Slider(
-                    id="VLM_MAX_PAGES",
-                    label="VLM Max Pages",
-                    initial=int(getattr(settings, "vlm_max_pages", 25) or 25),
-                    min=0,
-                    max=200,
-                    step=1,
-                    description="Local VLM (llava) sayfa bazinda maliyetlidir. Hiz icin dusur.",
-                ),
-                Switch(
-                    id="SHOW_DEBUG",
-                    label="Debug panelini goster",
-                    initial=_bool(cl.user_session.get(_K_SHOW_DEBUG), default=False),
-                ),
-            ]
-        ).send()
-
+        vlm_line = (
+            f"Ollama `{settings.ollama_vlm_model}`"
+            if getattr(settings, "vlm_provider", "gemini") == "local"
+            else "Kapalı / Gemini"
+        )
         await cl.Message(
             content=(
-                "Belge Analiz Sistemi\n\n"
-                + _ui_badges(settings)
-                + "\n"
-                + "- Belge yüklemek için PDF/PNG/JPG dosyasını sürükleyip bırakın veya paperclip ikonunu kullanın.\n"
-                + "- Komutlar: `/chat`, `/doc`, `/use <dosya>`, `/debug on|off`\n"
-                + "\n"
-                + "İstersen örnek sorular:\n"
-                + "- `Bu dokümanın amacı nedir?`\n"
-                + "- `Bu bölümde neler var? (listele)`\n"
-            ),
-            actions=_base_actions(),
+                "Belge Analiz Sistemi — **Local (Offline) Mod**\n\n"
+                f"- **LLM**: Ollama `{settings.ollama_llm_model}`\n"
+                f"- **VLM**: {vlm_line}\n"
+                f"- **Embedding**: `{settings.embedding_model}`\n\n"
+                "- Belge yüklemek için PDF/PNG/JPG dosyasını sürükleyip bırakın veya paperclip ikonunu kullanın.\n"
+                "- Komutlar: `/chat`, `/doc`, `/use <dosya>`\n"
+            )
         ).send()
-        pipeline = _get_pipeline()
-        await _ensure_status_message(settings, pipeline)
         return
 
     if settings.llm_provider == "none" or not settings.gemini_api_key:
-        # Extractive mode: no LLM needed, embedding + retrieval only.
         await cl.Message(
             content=(
                 "Belge Analiz Sistemi — **Extractive Mod** (LLM devre disi)\n\n"
                 "- Belge yukleyip soru sorabilirsiniz. Cevaplar dogrudan belgeden alinacaktir.\n"
                 "- LLM destegi icin `.env` dosyasinda `LLM_PROVIDER=gemini` ve `GEMINI_API_KEY` ayarlayin.\n"
                 "- Belge yuklemek icin PDF/PNG/JPG dosyasini surukleyip birakin.\n"
-                "- Komutlar: `/doc`, `/use <dosya>`, `/debug on|off`\n"
+                "- Komutlar: `/doc`, `/use <dosya>`\n"
             )
-        ,
-            actions=_base_actions(),
         ).send()
-        pipeline = _get_pipeline()
-        await _ensure_status_message(settings, pipeline)
         return
 
-    # Do NOT block the chat by forcing an upload modal.
-    # Users should be able to type immediately (/chat) and upload anytime via drag&drop/paperclip.
     await cl.Message(
         content=(
-            "Belge Analiz Sistemi\n\n"
-            + _ui_badges(settings)
-            + "\n"
-            + "- Belge yüklemek için PDF/PNG/JPG dosyasını sürükleyip bırakabilir veya paperclip ikonuyla yükleyebilirsin.\n"
-            + "- Komutlar: `/chat`, `/doc`, `/use <dosya>`, `/debug on|off`\n"
-            + "\n"
-            + "İstersen örnek sorular:\n"
-            + "- `Dokümandaki ana başlıklar nelerdir?`\n"
-            + "- `Bu dokümanda geçen kritik gereksinimleri listele.`\n"
-        ),
-        actions=_base_actions(),
+            "Belge Analiz ve Soru-Cevap Sistemine Hosgeldiniz!\n\n"
+            "- Belge yüklemek için PDF/PNG/JPG dosyasını sürükleyip bırakabilir veya paperclip ikonuyla yükleyebilirsin.\n"
+            "- Komutlar: `/chat`, `/doc`, `/use <dosya>`\n"
+        )
     ).send()
-    pipeline = _get_pipeline()
-    await _ensure_status_message(settings, pipeline)
 
 
 @cl.on_chat_end
@@ -588,33 +357,18 @@ def _process_uploaded_file_sync(file_path: str, file_name: str) -> str:
 @cl.on_message
 async def on_message(message: cl.Message):
     pipeline: RAGPipeline | None = cl.user_session.get("pipeline")
-    mode: str = cl.user_session.get(_K_MODE) or "doc"  # "doc" | "chat"
+    mode: str = cl.user_session.get("mode") or "doc"
 
     # Check for file attachments in the message
     if message.elements:
         for elem in message.elements:
             if hasattr(elem, "path") and elem.path:
-                # Progress message (updated in-place)
-                msg = cl.Message(content=f"**{elem.name}** işleniyor…\n- Aşama: **ingestion/index**")
-                await msg.send()
+                await cl.Message(content=f"**{elem.name}** işleniyor…").send()
                 status = await cl.make_async(_process_uploaded_file_sync)(
                     elem.path, elem.name
                 )
-                msg.content = status
-                await msg.update()
-                # Refresh pipeline reference
+                await cl.Message(content=status).send()
                 pipeline = cl.user_session.get("pipeline")
-                settings = load_settings()
-                await _ensure_status_message(settings, pipeline)
-                # Offer one-click document switching if multiple docs exist.
-                try:
-                    if pipeline and pipeline.has_documents and len(pipeline.list_documents()) >= 2:
-                        await cl.Message(
-                            content="Aktif belgeyi seçmek için tıkla (veya `/use <dosya>`):",
-                            actions=_doc_actions(pipeline),
-                        ).send()
-                except Exception:
-                    pass
 
     query = message.content.strip()
     if not query:
@@ -622,40 +376,15 @@ async def on_message(message: cl.Message):
 
     # Natural-language mode switches (work in any mode).
     if _looks_like_chat_mode_request(query) or query.strip().lower() in ("/chat", "/sohbet"):
-        cl.user_session.set(_K_MODE, "chat")
+        cl.user_session.set("mode", "chat")
         await cl.Message(content="Sohbet moduna geçildi. Belge soruları için `/doc` yazabilirsin.").send()
-        settings = load_settings()
-        await _ensure_status_message(settings, pipeline)
         return
     if _looks_like_doc_mode_request(query) or query.strip().lower() in ("/doc", "/belge"):
-        cl.user_session.set(_K_MODE, "doc")
-        # Don't force-create pipeline; just guide the user.
+        cl.user_session.set("mode", "doc")
         if pipeline and pipeline.has_documents:
             await cl.Message(content="Belge moduna geçildi. Belge sorunu sorabilirsin. (Sohbet için `/chat` yazabilirsin.)").send()
         else:
             await cl.Message(content="Belge moduna geçildi. Devam etmek için lütfen bir PDF/PNG/JPG yükle. (Sohbet için `/chat` yazabilirsin.)").send()
-        return
-
-    # Debug toggle command
-    if query.strip().lower() in ("/debug", "/debug on", "/debug off"):
-        if query.strip().lower().endswith("off"):
-            cl.user_session.set(_K_SHOW_DEBUG, False)
-            await cl.Message(content="Debug modu: **KAPALI**", actions=_base_actions()).send()
-            settings = load_settings()
-            await _ensure_status_message(settings, pipeline)
-            return
-        if query.strip().lower().endswith("on"):
-            cl.user_session.set(_K_SHOW_DEBUG, True)
-            await cl.Message(content="Debug modu: **AÇIK**", actions=_base_actions()).send()
-            settings = load_settings()
-            await _ensure_status_message(settings, pipeline)
-            return
-        # Toggle if no explicit arg
-        cur = _bool(cl.user_session.get(_K_SHOW_DEBUG), default=False)
-        cl.user_session.set(_K_SHOW_DEBUG, not cur)
-        await cl.Message(content=f"Debug modu: **{('AÇIK' if not cur else 'KAPALI')}**", actions=_base_actions()).send()
-        settings = load_settings()
-        await _ensure_status_message(settings, pipeline)
         return
 
     # Auto small-talk: answer conversational messages even in doc mode.
@@ -686,8 +415,6 @@ async def on_message(message: cl.Message):
         else:
             docs = pipeline.list_documents() if pipeline else []
             await cl.Message(content=f"Belge bulunamadı: **{name}**\nMevcut belgeler: {', '.join(docs) if docs else '(yok)'}").send()
-        settings = load_settings()
-        await _ensure_status_message(settings, pipeline)
         return
 
     # Ensure pipeline exists
@@ -695,11 +422,11 @@ async def on_message(message: cl.Message):
         pipeline = _get_pipeline()
 
     # Chat mode does not require documents
-    mode = cl.user_session.get(_K_MODE) or mode
+    mode = cl.user_session.get("mode") or mode
     if mode == "chat":
         # If user is asking how to return to doc mode, switch and guide.
         if _looks_like_doc_mode_request(query):
-            cl.user_session.set(_K_MODE, "doc")
+            cl.user_session.set("mode", "doc")
             if pipeline.has_documents:
                 await cl.Message(
                     content="Belge moduna geçildi. Belge sorunu sorabilirsin. (İstersen `/chat` ile tekrar sohbet moduna dönebilirsin.)"
@@ -712,7 +439,7 @@ async def on_message(message: cl.Message):
 
         # Auto-switch to doc if message clearly refers to a loaded document.
         if _looks_like_doc_switch(query, pipeline):
-            cl.user_session.set(_K_MODE, "doc")
+            cl.user_session.set("mode", "doc")
             mode = "doc"
         else:
             thinking_msg = cl.Message(content="Dusunuyorum...")
@@ -726,6 +453,7 @@ async def on_message(message: cl.Message):
             await cl.Message(content=answer).send()
             return
 
+    mode = cl.user_session.get("mode") or mode
     # Doc mode requires documents
     if not pipeline.has_documents:
         await cl.Message(
@@ -755,86 +483,27 @@ async def on_message(message: cl.Message):
         await cl.Message(content=f"Hata: {e}").send()
         return
 
-    # Build response
+    # Build response: answer + debug details (always shown)
     answer = result.answer
-
-    # Build a compact "Sources" section (UX improvement). Answer already contains inline citations.
-    cites_a = re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)
-    cites_b = re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
-    sources = sorted({c.strip() for c in (cites_a + cites_b) if c and c.strip()})
-    sources_block = ""
-    if sources:
-        src_lines = "\n".join([f"- {c}" for c in sources[:20]])
-        sources_block = (
-            "\n\n---\n"
-            "<details><summary>Kaynaklar</summary>\n\n"
-            f"{src_lines}\n\n"
-            "</details>"
+    debug_lines = [
+        f"- **Mod**: {mode}",
+        f"- **Intent**: {result.intent}",
+        f"- **Citation sayisi**: {result.citations_found}",
+    ]
+    if result.coverage_expected is not None:
+        status_emoji = "OK" if result.coverage_ok else "EKSIK"
+        debug_lines.append(
+            f"- **Kapsam**: beklenen={result.coverage_expected}, "
+            f"bulunan={result.coverage_actual}, durum={status_emoji}"
         )
+    debug_text = "\n".join(debug_lines)
+    full_response = (
+        f"{answer}\n\n"
+        f"---\n"
+        f"<details><summary>Debug Bilgisi</summary>\n\n"
+        f"{debug_text}\n\n"
+        f"</details>"
+    )
 
-    show_debug = _bool(cl.user_session.get(_K_SHOW_DEBUG), default=False)
-    if show_debug:
-        debug_lines = [
-            f"- **Mod**: {mode}",
-            f"- **Intent**: {result.intent}",
-            f"- **Citation sayisi**: {result.citations_found}",
-        ]
-        if result.coverage_expected is not None:
-            status_emoji = "OK" if result.coverage_ok else "EKSIK"
-            debug_lines.append(
-                f"- **Kapsam**: beklenen={result.coverage_expected}, "
-                f"bulunan={result.coverage_actual}, durum={status_emoji}"
-            )
-        debug_text = "\n".join(debug_lines)
-        full_response = (
-            f"{answer}\n\n"
-            f"---\n"
-            f"<details><summary>Debug Bilgisi</summary>\n\n"
-            f"{debug_text}\n\n"
-            f"</details>"
-            f"{sources_block}"
-        )
-    else:
-        full_response = f"{answer}{sources_block}"
-
-    # Remove thinking message and send answer
     await thinking_msg.remove()
     await cl.Message(content=full_response).send()
-
-
-@cl.on_settings_update
-async def _on_settings_update(settings_update: dict) -> None:
-    """
-    React to ChatSettings updates (session-only).
-    We keep behavior backwards compatible by only adjusting runtime pipeline config.
-    """
-    cl.user_session.set(_K_CHAT_SETTINGS, settings_update or {})
-    # Update debug toggle
-    if "SHOW_DEBUG" in (settings_update or {}):
-        cl.user_session.set(_K_SHOW_DEBUG, _bool(settings_update.get("SHOW_DEBUG"), default=False))
-
-    # Update pipeline VLM settings if available
-    pipe: RAGPipeline | None = cl.user_session.get("pipeline")
-    if pipe and pipe.vlm_config:
-        v = pipe.vlm_config
-        new_mode = (settings_update or {}).get("VLM_MODE", v.mode)
-        new_max = (settings_update or {}).get("VLM_MAX_PAGES", v.max_pages)
-        try:
-            new_max_i = int(new_max)
-        except Exception:
-            new_max_i = v.max_pages
-        # VLMConfig is frozen; create a new instance with updated fields.
-        pipe.vlm_config = VLMConfig(
-            api_key=v.api_key,
-            model=v.model,
-            mode=str(new_mode),
-            max_pages=int(new_max_i),
-            provider=getattr(v, "provider", "gemini"),
-            ollama_base_url=getattr(v, "ollama_base_url", "http://localhost:11434"),
-            ollama_vlm_model=getattr(v, "ollama_vlm_model", "llava:7b"),
-            ollama_timeout=getattr(v, "ollama_timeout", 120),
-        )
-
-    # Refresh status panel
-    app_settings = load_settings()
-    await _ensure_status_message(app_settings, pipe)

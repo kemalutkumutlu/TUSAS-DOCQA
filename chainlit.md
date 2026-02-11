@@ -21,7 +21,6 @@ PDF ve gorsel (JPG, PNG) belgelerinizi yukleyin, ardindan Turkce veya Ingilizce 
   - `/chat`: Belge olmadan sohbet
   - `/doc`: Belge modu (belge sorulari)
   - `/use <dosya>`: Aktif belge sec
-  - `/debug on|off`: Debug panelini ac/kapat (varsayilan: kapali)
 
 ## Notlar
 
@@ -29,9 +28,6 @@ PDF ve gorsel (JPG, PNG) belgelerinizi yukleyin, ardindan Turkce veya Ingilizce 
 - Birden fazla belge yuklediyseniz, soru hedefini netlestirmek icin `/use <dosya>` kullanin.
 - Ayni dosyayi (icerik ayni) **ayni oturumda** tekrar yuklerseniz sistem yeniden indekslemez; sadece o dokumani aktif hale getirir (hizli).
 - (Opsiyonel) Loglama: Soru/cevaplari JSONL olarak kaydetmek icin `.env` icinde `RAG_LOG=1` yapabilirsiniz (detay: `README.md`).
-- UI iyilestirmeleri: karsilama mesajinda hizli butonlar (Belge Modu / Sohbet Modu / Debug) ve coklu belge durumunda tek tikla belge secimi bulunur.
-- Durum Paneli: aktif belge / mod / LLM-VLM / toplam chunk bilgisi gosterilir (tek bir mesaj guncellenir).
-- Chat Settings: VLM mode ve max page limitini arayuzden ayarlayabilirsiniz (session-only).
 
 ## Local (Offline) Mod
 

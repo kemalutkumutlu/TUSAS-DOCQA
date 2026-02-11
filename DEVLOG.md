@@ -357,16 +357,8 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - `LLM_PROVIDER=gemini` (veya bos) default davranisi birebir korunur
 - Baseline gate ve diger LLM-free testler etkilenmez
 
-### 10.6 — Chainlit UI Iyilestirmeleri (Non-invasive)
-- `app.py`:
-  - Karsilama mesajlari: mod rozetleri + hizli aksiyon butonlari (Belge Modu / Sohbet Modu / Debug)
-  - Debug paneli varsayilan kapali; `/debug on|off` veya UI butonu ile acilip kapatilabilir
-  - Cevaplarda ek olarak "Kaynaklar" collapse bolumu (inline citation'lari tekrar listeler)
-  - Durum Paneli: aktif belge / mod / LLM-VLM / toplam chunk bilgisi (tek mesaj guncellenir)
-  - Chat Settings: `VLM_MODE`, `VLM_MAX_PAGES`, `Debug` toggle (session-only)
-  - Coklu belge durumunda tek tikla aktif belge secimi (Action butonlari)
-- `.chainlit/config.toml` + `public/stylesheet.css`:
-  - Basit kurumsal gorunum (dark theme, wide layout, spacing/contrast polish)
+### 10.6 — Not (UI)
+- Arayuz, local LLM implementasyonu bitis halinde tutuldu: basit karsilama, basit dosya yukleme, cevaplarda her zaman Debug Bilgisi detayi. Durum Paneli, Chat Settings ve tema dosyalari (stylesheet/theme.json) geri alindi.
 
 ## Sonraki Adimlar
 - ~~Retrieval kalitesi icin mini eval set + metrikler~~ -> TAMAM (Faz 7.2)
