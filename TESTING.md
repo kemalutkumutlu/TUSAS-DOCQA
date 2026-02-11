@@ -19,6 +19,8 @@ Bu komut:
 - Sentetik PDF’ler uzerinde ingestion → structure → indexing → retrieval akisini dogrular
 - `section_list` subtree fetch ve coklu-belge izolasyonunu kontrol eder
 
+> Not: GitHub Actions CI icinde bu gate otomatik kosar (Baseline Gate job).
+
 ### 0.2 Case Study kabul kapisi (Gemini gerekir)
 
 ```bash
@@ -30,6 +32,8 @@ python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
 ```bash
 python scripts/lang_gate.py
 ```
+
+> Not: GitHub Actions CI icinde bu gate otomatik kosar (Baseline Gate job).
 
 ### 0.35 Retrieval kalite metrikleri (LLM-free)
 

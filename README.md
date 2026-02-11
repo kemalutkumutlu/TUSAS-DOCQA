@@ -4,6 +4,18 @@
 
 Yapay zeka destekli **Belge Analiz ve Soru-Cevap** sistemi. PDF ve gorsel belgeleri yukleyerek doğal dil ile soru sorun, kaynakli ve dogrulanmis cevaplar alin.
 
+## CI (GitHub Actions)
+
+Workflow: `.github/workflows/ci.yml`
+
+- **Baseline Gate (LLM-free)**: Her push/PR’da core pipeline regresyon kapilarini kosar:
+  - `python scripts/baseline_gate.py`
+  - `python scripts/lang_gate.py`
+- **Case Study Eval (Gemini)**: Sadece `GEMINI_API_KEY` tanimliysa calisir (repo Settings → Secrets/Variables):
+  - `python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf`
+
+> Not: Secret yoksa eval job adimlari otomatik skip edilir.
+
 ## Mimari
 
 ```
@@ -312,7 +324,7 @@ Loglar JSONL formatinda yazilir:
 - Vector store olarak **ChromaDB** kullanilmaktadir (MVP icin en hizli kurulum).
 - Sparse index: **BM25** (rank-bm25), her build/extend sonrasi `data/chroma/bm25_index.pkl` olarak diske kaydedilir.
 - Embedding modeli: `intfloat/multilingual-e5-small` (TR/EN multilingual, hafif).
-- LLM: **Gemini 2.0 Flash** (varsayilan, `.env`'den degistirilebilir).
+- LLM: **Gemini 2.0 Flash** (varsayilan, `.env`'den degistirilebilir). Gemini secimi ayrica pratik bir sebeple yapilmistir: Google AI Studio **300$ free credit** verdigi icin kullanilmistir.
 - `LLM_PROVIDER=none` ile LLM olmadan extractive QA modunda calisir.
 - CI: `.github/workflows/ci.yml` her push'ta `baseline_gate` + `lang_gate` calistirir.
 

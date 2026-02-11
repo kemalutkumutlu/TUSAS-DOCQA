@@ -196,7 +196,7 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 
 ### Faz 4-5 — Generation Alternatifleri
 - **LLM-only section list vs Deterministic rendering**: LLM bazen madde atliyordu. Deterministic rendering ile LLM'e gitmeden parent chunk text'inden madde cikarimi yapilarak %100 coverage saglandi. LLM yolu sadece deterministic cikarilamadiginda fallback olarak kullaniliyor.
-- **OpenAI vs Gemini**: Her iki API de destekleniyor, ancak Gemini 2.0 Flash'in TR performansi, fiyat/performans orani ve multimodal yeteneginden dolayi varsayilan olarak Gemini secildi.
+- **OpenAI vs Gemini**: Her iki API de destekleniyor, ancak Gemini 2.0 Flash'in TR performansi, fiyat/performans orani ve multimodal yeteneginden dolayi varsayilan olarak Gemini secildi. Ayrica Google AI Studio **300$ free credit** verdigi icin (case study suresince) pratik bir tercih oldu.
 
 ## Zorluklar ve Cozumler
 
