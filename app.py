@@ -85,15 +85,33 @@ _SMALLTALK_PATTERNS = [
     r"^(teşekkür(ler)?|tesekkur(ler)?|sağ ol|sagol|eyvallah|rica ederim)\b",
     r"^(günaydın|iyi akşamlar|iyi geceler|iyi günler)\b",
     r"\bkimsin\b|\bsen kimsin\b|\bne yapıyorsun\b",
-    # Follow-up smalltalk / compliments (keep conservative: mostly standalone)
+    # Follow-up smalltalk
     r"\bben\s+nas\w*ls\w*m\b",
     r"\bsorm\w*\s+m\w*s\w*n\b",  # "sormicak mısın / sormayacak mısın" etc.
-    r"^(aferin|bravo|helal|tebrik(ler)?|güzel|guzel|iyi\s*i[şs])\b",
+    r"\bemin\s+m\w*s\w*n\b|\bgercekten\s+mi\b|\bciddi\s+misin\b",
     # English
     r"^(hi|hello|hey)\b",
     r"\bhow are you\b|\bhow's it going\b",
     r"^(thanks|thank you)\b",
     r"\bwho are you\b",
+    r"\bare you sure\b|\breally\??\b",
+]
+
+_PRAISE_PATTERNS = [
+    # Turkish praise / compliments
+    r"^(aferin|bravo|helal|tebrik(ler)?|güzel|guzel|iyi\s*i[şs])\b",
+    r"\b(harikasın|harikasin|mükemmel|mukemmel|süpersin|supersin|kralsın|kralsin)\b",
+    # English praise
+    r"\b(great job|well done|nice work|awesome|you are awesome|you're awesome|congrats)\b",
+]
+
+_NEGATIVE_FEELING_PATTERNS = [
+    # Turkish negative mood
+    r"\b(üzgünüm|uzgunum|moralim bozuk|canım sıkkın|canim sikkin)\b",
+    r"\b(kötüyüm|kotuyum|berbatım|berbatim|cok kotuyum|çok kötüyüm)\b",
+    r"\b(stresliyim|kaygılıyım|kaygiliyim|endişeliyim|endiseliyim|yoruldum|bıktım|biktim)\b",
+    # English negative mood
+    r"\b(i am sad|i'm sad|i feel bad|i am upset|i'm upset|bad day|feeling down)\b",
 ]
 
 _CHAT_MODE_REQUEST_PATTERNS = [
@@ -188,7 +206,36 @@ def _looks_like_smalltalk(query: str) -> bool:
         for pat in _SMALLTALK_PATTERNS:
             if re.search(pat, q, flags=re.IGNORECASE):
                 return True
+        for pat in _PRAISE_PATTERNS:
+            if re.search(pat, q, flags=re.IGNORECASE):
+                return True
+        for pat in _NEGATIVE_FEELING_PATTERNS:
+            if re.search(pat, q, flags=re.IGNORECASE):
+                return True
     return False
+
+
+def _smalltalk_style(query: str) -> str:
+    """
+    Return style hint for chat response:
+      - "empathetic" for negative feelings
+      - "congratulatory" for praise
+      - "neutral" otherwise
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return "neutral"
+    for pat in _DOC_CUE_PATTERNS:
+        if re.search(pat, q, flags=re.IGNORECASE):
+            return "neutral"
+
+    for pat in _NEGATIVE_FEELING_PATTERNS:
+        if re.search(pat, q, flags=re.IGNORECASE):
+            return "empathetic"
+    for pat in _PRAISE_PATTERNS:
+        if re.search(pat, q, flags=re.IGNORECASE):
+            return "congratulatory"
+    return "neutral"
 
 
 def _get_pipeline() -> RAGPipeline:
@@ -373,6 +420,7 @@ async def on_message(message: cl.Message):
     query = message.content.strip()
     if not query:
         return
+    chat_style = _smalltalk_style(query)
 
     # Natural-language mode switches (work in any mode).
     if _looks_like_chat_mode_request(query) or query.strip().lower() in ("/chat", "/sohbet"):
@@ -394,7 +442,7 @@ async def on_message(message: cl.Message):
         thinking_msg = cl.Message(content="Dusunuyorum...")
         await thinking_msg.send()
         try:
-            answer = await cl.make_async(pipeline.chat)(query)
+            answer = await cl.make_async(pipeline.chat)(query, chat_style)
         except Exception as e:
             await cl.Message(content=f"Hata: {e}").send()
             return
@@ -445,7 +493,7 @@ async def on_message(message: cl.Message):
             thinking_msg = cl.Message(content="Dusunuyorum...")
             await thinking_msg.send()
             try:
-                answer = await cl.make_async(pipeline.chat)(query)
+                answer = await cl.make_async(pipeline.chat)(query, chat_style)
             except Exception as e:
                 await cl.Message(content=f"Hata: {e}").send()
                 return

@@ -53,6 +53,25 @@ Kurallar:
 """
 
 
+def _chat_style_addendum(chat_style: str) -> str:
+    style = (chat_style or "").strip().lower()
+    if style == "empathetic":
+        return (
+            "\n\nTON KILAVUZU:\n"
+            "- Kullanıcı olumsuz/üzgün bir duygu paylaşıyor.\n"
+            "- Kısa bir empati ifadesiyle başla (örn. 'Üzgünüm, zor bir gün gibi görünüyor.').\n"
+            "- Yargılamadan, sakin ve destekleyici bir dille devam et.\n"
+        )
+    if style == "congratulatory":
+        return (
+            "\n\nTON KILAVUZU:\n"
+            "- Kullanıcı övgü/tebrik içerikli bir ifade kullandı.\n"
+            "- Kısa bir teşekkür veya tebrik karşılığı ver.\n"
+            "- Samimi ama kısa kal; abartılı ifadelerden kaçın.\n"
+        )
+    return ""
+
+
 # ── Language selection (lightweight, document-agnostic) ───────────────────────
 
 _TR_CHARS = set("çğıöşüÇĞİÖŞÜ")
@@ -411,6 +430,7 @@ def generate_chat_answer(
     query: str,
     gemini_api_key: str,
     gemini_model: str = "gemini-2.0-flash",
+    chat_style: str = "neutral",
 ) -> str:
     """
     Chat-only generation (no retrieval, no citations).
@@ -439,7 +459,7 @@ def generate_chat_answer(
                 model=gemini_model,
                 contents=f"SORU: {query}",
                 config=types.GenerateContentConfig(
-                    system_instruction=_CHAT_SYSTEM_PROMPT + _language_addendum(query),
+                    system_instruction=_CHAT_SYSTEM_PROMPT + _chat_style_addendum(chat_style) + _language_addendum(query),
                     temperature=0.4,
                     max_output_tokens=1024,
                 ),
@@ -635,13 +655,14 @@ def generate_answer(
 def generate_chat_answer_local(
     query: str,
     ollama_cfg: "OllamaConfig",
+    chat_style: str = "neutral",
 ) -> str:
     """
     Chat-only generation via local Ollama (no retrieval, no citations).
     """
     from .local_llm import OllamaConfig, ollama_chat  # noqa: F811
 
-    system = _CHAT_SYSTEM_PROMPT + _language_addendum(query)
+    system = _CHAT_SYSTEM_PROMPT + _chat_style_addendum(chat_style) + _language_addendum(query)
     result = ollama_chat(cfg=ollama_cfg, system=system, user_message=f"SORU: {query}", temperature=0.4, max_tokens=1024)
     return result or "Anlayamadım, tekrar eder misin?"
 

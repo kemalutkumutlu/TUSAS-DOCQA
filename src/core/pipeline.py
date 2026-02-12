@@ -457,7 +457,7 @@ class RAGPipeline:
             )
 
         return result
-    def chat(self, query: str) -> str:
+    def chat(self, query: str, chat_style: str = "neutral") -> str:
         """
         Chat-only mode (no retrieval).
         """
@@ -465,11 +465,13 @@ class RAGPipeline:
             return generate_chat_answer_local(
                 query=query,
                 ollama_cfg=self.ollama_config,
+                chat_style=chat_style,
             )
         return generate_chat_answer(
             query=query,
             gemini_api_key=self.gemini_api_key,
             gemini_model=self.gemini_model,
+            chat_style=chat_style,
         )
 
     def get_retrieval(self, query: str) -> RetrievalResult:
