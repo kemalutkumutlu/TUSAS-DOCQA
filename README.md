@@ -586,49 +586,164 @@ Loglar JSONL formatinda yazilir:
 ├── test_data/
 │   └── eval_questions.json     # 25 soruluk retrieval eval seti
 ├── .github/
+
+### Mod Davranisi (Kisa)
+
+- **Doc modu**: Belge sorularinda sadece belgelerden cevap verir; baglam yoksa “Belgede bu bilgi bulunamadı.” der.
+- **Chat modu**: Genel sohbet (belgeye dayali iddia uretmez).
+- Doc moddayken **kisa small-talk** (selam, tesekkur, “ben nasilim”, “aferin” vb.) otomatik sohbet cevabi alabilir.
+
+## Kabul Testi (Case Study)
+
+Case study dokumani icin katı kabul kriterlerini otomatik kontrol etmek icin:
+
+```bash
+python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf
+```
+
+### LLM gerektirmeyen hizli regresyon (onerilen)
+
+LLM anahtari olmadan, sentetik PDF’ler uzerinden core pipeline’i (ingestion/structure/indexing/retrieval)
+kontrol etmek icin:
+
+```bash
+python scripts/baseline_gate.py
+```
+
+### Retrieval kalite metrikleri (LLM-free)
+
+25 soruluk eval set uzerinde intent accuracy, section hit, evidence recall olcumu:
+
+```bash
+python scripts/eval_retrieval.py --pdf Case_Study_20260205.pdf
+```
+
+Son calistirma sonuclari (guncel kosu):
+
+```
+Intent Accuracy : 25/25 (100%)
+Heading Hit     : 15/15 (100%)
+Section Hit     : 6/6  (100%)
+Evidence Met    : 25/25 (100%)
+Avg Latency     : 19 ms
+```
+
+### Halusinasyon Testi (Gemini gerekir)
+
+25 soruluk (10 pozitif + 15 negatif) kapsamli halusinasyon ve sadakat testi:
+
+```bash
+python scripts/hallucination_test.py --pdf test_data/Case_Study_20260205.pdf
+```
+
+Son calistirma sonuclari (2026-02-11, Faz 9 — confidence guard sonrasi):
+
+| Metrik | Deger |
+|--------|-------|
+| Pozitif dogru yanit | 10/10 (100%) |
+| Negatif dogru red | **15/15 (100%)** |
+| Halusinasyon orani | **0/15 (0%)** |
+| Citation uyumu | 10/10 (100%) |
+
+### (Opsiyonel) Test klasoru + loglama (onerilen)
+
+Birden fazla PDF ile hizli denemek icin `test_data/` altina PDF’leri koyup:
+
+```bash
+python scripts/folder_suite.py --dir test_data --mode retrieval --isolate 1 --max_pdfs 1
+```
+
+LLM cevaplari + soru/cevap loglari icin (Gemini gerekir):
+
+```bash
+python scripts/folder_suite.py --dir test_data --mode ask --isolate 1 --max_pdfs 1
+```
+
+Soru/cevap loglarini acmak icin `.env` icine:
+
+```ini
+RAG_LOG=1
+RAG_LOG_DIR=./data/logs
+```
+
+Loglar JSONL formatinda yazilir:
+- `data/logs/rag_<YYYYMMDD>_session_<id>.jsonl`
+- `data/logs/by_doc/<dosya>.jsonl`
+
+> Not: `--isolate 1` her PDF’i ayri indeksledigi icin (coklu PDF’de) daha hizli ve daha “deterministik” test verir.
+> Ilk calistirmada embedding modeli indirilecegi icin sure uzayabilir.
+
+### Troubleshooting (Windows)
+
+- **Chainlit "config.toml outdated" hatasi**:
+  - Hata ornegi: `ValueError: ... .chainlit/config.toml is outdated`
+  - Cozum: `.chainlit/config.toml` dosyasini silin ve `python -m chainlit run app.py` ile yeniden baslatin (Chainlit dosyayi yeniden uretir). Sonra gerekiyorsa UI ozellestirmelerini tekrar uygulayin.
+- **Port 8000 zaten kullanimda / tab kapandi ama process durmadi**:
+  - Hızlı cozum: farkli portla baslatin:
+
+    ```bash
+    python -m chainlit run app.py -w --port 8001
+    ```
+
+  - Gelistirme kolayligi (onerilen): tab/connection kapaninca process’in otomatik cikmasi icin `.env` icine ekleyin:
+
+    ```ini
+    AUTO_EXIT_ON_NO_CLIENTS=1
+    AUTO_EXIT_GRACE_SECONDS=8
+    ```
+
+- **HuggingFace symlink uyarisi**: Embedding modeli ilk calistirmada indirilebilir ve Windows’ta symlink desteklenmiyorsa uyarı gorebilirsiniz. Developer Mode acmak veya admin olarak calistirmak uyarıyı azaltır; islevsel olarak calismaya devam eder.
+- **Model 404 / NOT_FOUND**: `GEMINI_MODEL` hesabinizda aktif degilse `.env` icinde `gemini-2.0-flash` gibi daha yaygin bir modele gecin.
+- **`Collection expecting embedding with dimension of 384, got 768`**: Daha once baska bir embedding modeliyle olusturulmus kalici Chroma index'i kullaniyorsunuz (orn. e5-small=384 → e5-base=768). Cozum:
+  - `CHROMA_DIR`'i yeni/bos bir klasore alin (ornegin `CHROMA_DIR=./data/chroma_768`) ve yeniden indeksleyin, veya
+  - `data/chroma/` klasorunu temizleyip yeniden build edin.
+
+## Proje Yapisi
+
+```
+.
+├── app.py                      # Chainlit UI
+├── chainlit.md                 # UI acilis ekrani
+├── .env.example                # Ornek konfigrasyon
+├── requirements.txt            # Python bagimliliklari
+├── GPU_REQUIREMENTS.md         # (Opsiyonel) GPU kurulum ve dogrulama
+├── DEVLOG.md                   # Gelistirme sureci kaydi
+├── TESTING.md                  # Test senaryolari ve sonuclari
+├── public/                     # UI tema/logo/custom JS (Chainlit static)
+├── src/
+│   ├── config.py               # Ortam degiskenleri yukleyici
+│   └── core/
+│       ├── models.py           # Veri modelleri (PageText, Chunk, ...)
+│       ├── utils.py            # Yardimci fonksiyonlar (sha256, normalize)
+│       ├── ingestion.py        # PDF/image okuma + OCR
+│       ├── structure.py        # Heading detection + section tree + chunking
+│       ├── embedding.py        # SentenceTransformer wrapper
+│       ├── eventlog.py         # (Opsiyonel) JSONL event logging (env ile acilir)
+│       ├── vectorstore.py      # ChromaDB persistent store
+│       ├── sparse.py           # BM25 sparse index (kalici, disk'e kaydedilir)
+│       ├── hybrid.py           # RRF fusion
+│       ├── indexing.py         # LocalIndex (Chroma + BM25)
+│       ├── retrieval.py        # Query routing + section fetch + coverage
+│       ├── generation.py       # Gemini LLM + guardrails + citation + extractive QA
+│       └── pipeline.py         # RAGPipeline (tum adimlari birlestirir)
+├── scripts/
+│   ├── extract_text.py         # CLI: metin cikarma testi
+│   ├── preview_structure.py    # CLI: section tree goruntuleme
+│   ├── build_index.py          # CLI: index olusturma
+│   ├── search_index.py         # CLI: hybrid search testi
+│   ├── baseline_gate.py        # LLM-free core RAG gate (sentetik PDF)
+│   ├── lang_gate.py            # LLM-free dil secimi gate
+│   ├── eval_retrieval.py       # LLM-free retrieval kalite metrikleri
+│   ├── folder_suite.py         # Klasordeki PDF'leri toplu test + opsiyonel log
+│   ├── smoke_suite.py          # Multi-doc izolasyon smoke testleri
+│   ├── eval_case_study.py      # Case Study kabul kapisi (Gemini gerekir)
+│   ├── hallucination_test.py   # Halusinasyon & sadakat testi (25 soru, Gemini gerekir)
+│   ├── test_retrieval.py       # CLI: retrieval pipeline testi
+│   └── test_generation.py      # CLI: uctan uca generation testi
+├── test_data/
+│   └── eval_questions.json     # 25 soruluk retrieval eval seti
+├── .github/
 │   └── workflows/ci.yml        # GitHub Actions CI (baseline + opsiyonel Gemini eval)
 └── data/
     └── chroma/                 # ChromaDB + BM25 kalici depolama
 ```
-
-## Tasarim Kararlari
-
-1. **Neden Hierarchical Chunking?**
-   Naif chunking'de "X nelerdir?" gibi sorularda alt maddeler kaybolur. Parent-child yapiyla tum bolum getirilebilir.
-
-2. **Neden Hybrid Search?**
-   Dense search semantik benzerligi, BM25 anahtar kelime eslesmeyi yakalar. RRF ile birlestirilince her iki avantaj alinir.
-
-3. **Neden Query Routing?**
-   "nelerdir/listele" tipi sorularda top-k yerine complete section fetch yaparak eksik madde sorununu tasarimsal olarak cozer.
-
-4. **Neden Coverage Check?**
-   LLM bazen madde atlayabilir. Beklenen vs gercek madde sayisi karsilastirilarak kullaniciya uyari verilir.
-
-5. **Neden Strict System Prompt?**
-   Halusinasyonu onlemek icin LLM'e "SADECE baglamdaki bilgiyi kullan" ve "yoksa 'bulunamadi' de" kurallari zorunlu tutulur.
-
-6. **Neden Incremental Indexing?**
-   Yeni belge eklendiginde tum mevcut chunk'lari tekrar embed etmek O(n) maliyetlidir. Incremental upsert ile sadece yeni chunk'lar islenir.
-
-7. **Neden Extractive QA?**
-   LLM erisimi olmayan ortamlarda (offline/on-prem) da belge sorusu sorulabilsin diye, retrieval sonuclarini dogrudan alinti olarak donduren LLM-free mod eklendi.
-
-## Notlar
-
-- Vector store olarak **ChromaDB** kullanilmaktadir (MVP icin en hizli kurulum).
-- Sparse index: **BM25** (rank-bm25), her build/extend sonrasi `data/chroma/bm25_index.pkl` olarak diske kaydedilir.
-- Embedding modeli (varsayilan): `EMBEDDING_MODEL=auto` ile CUDA varsa `intfloat/multilingual-e5-base`, yoksa `intfloat/multilingual-e5-small`.
-- LLM: **Gemini 2.0 Flash** (varsayilan, `.env`'den degistirilebilir). Gemini secimi ayrica pratik bir sebeple yapilmistir: Google AI Studio **300$ free credit** verdigi icin kullanilmistir.
-- `LLM_PROVIDER=none` ile LLM olmadan extractive QA modunda calisir.
-- CI: `.github/workflows/ci.yml` her push'ta `baseline_gate` + `lang_gate` calistirir.
-
-## Gelecek Plan (Roadmap)
-
-| Ozellik | Durum | Aciklama |
-|---------|-------|----------|
-| **Reranker (Cross-Encoder)** | Planli | Hybrid top-k sonrasi cross-encoder ile yeniden siralama. Benzer baslikli bolumlerde "yakin ama yanlis" eslesmesini azaltir. Trade-off: +200-500ms latency, ~400MB ek model. Degerlendirme asamasinda. |
-| **Local (Ollama) LLM/VLM Provider** | Tamam | `LLM_PROVIDER=local` / `VLM_PROVIDER=local` ile tam offline calisma (Ollama). |
-| **OpenAI Provider** | Tamam | `LLM_PROVIDER=openai` ile OpenAI API uzerinden generation (UI profil secicisi de destekler). |
-| **Server-side sohbet gecmisi** | Gelecek | UI'daki localStorage gecmisi yerine (opsiyonel) sunucu tarafinda thread persistence. |
-| **PII Redaction / Audit** | Gelecek | Savunma sanayii senaryolari icin PII maskeleme, kullanici bazli erisim kontrolu ve audit trail. |

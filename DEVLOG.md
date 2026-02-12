@@ -400,3 +400,81 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - ~~Tamamen yerel/offline mod (Ollama)~~ -> TAMAM (Faz 10)
 - Demo video
 - Reranker (cross-encoder) degerlendirmesi (Roadmap'te)
+
+## Faz 12 — CV ve Yapısal Analiz Yolculuğu (Retrospektif)
+
+Bu bölüm, teknik bir rapordan ziyade geliştirme sürecindeki deneyimlerin, hataların ve çıkarımların bir günlüğüdür.
+
+### 12.1 — Problemi Nasıl Parçaladık?
+CV dokümanı (`CV-ornek-muhendis.pdf`) geldiğinde iki ana sorun tespit ettik:
+1. **İçerik:** PDF text layer bozuktu (`İ` -> ``).
+2. **Yapı:** Başlıklar numarasızdı ("İŞ DENEYİMİ"), bu yüzden parser bunları yakalayamadı.
+
+### 12.2 — Hangi Yaklaşımları Denedik?
+- **VLM Force Modu:** PDF bozuksa VLM (Görsel Analiz) kullanalım dedik.
+    - *Sorun:* Kodda `_pick_best_candidate` fonksiyonu, VLM çıktısını bile (yapısal puanı düşük diye) eliyordu. Yani "force" gerçekten force etmiyordu.
+- **Regex İyileştirmesi:** "İŞ DENEYİMİ" gibi kelimeleri başlık olarak tanıtmaya çalıştık.
+    - *Başarı:* Keyword-based heading detection ve (kontrollü) ALLCAPS detection ile numarasız başlıkları yakaladık.
+
+### 12.3 — Kritik Karar Noktaları
+- **Kod vs Prompt:** VLM promptunu mu iyileştirelim, yoksa Python kodunda parserı mı?
+    - *Karar:* Python kodunda parserı (`structure.py`) esnek hale getirmek daha kalıcı ve ucuz bir çözüm oldu.
+
+### 12.4 — Nerede Takıldık?
+- `master` branch'inde VLM force modunun çalışmadığını fark etmek zaman aldı. Çünkü testleri hep temiz PDF'lerle yapmıştık. Bozuk PDF ("happy path" dışı) gelince sistemin defansif kodları (structure check) bize engel oldu.
+- **Çözüm:** `yedek` branch'inde VLM force logic'ini "bypass structure check" haline getirdik.
+
+### 12.5 — Zamanımızı Nasıl Harcadık?
+- **%40:** Sorunun kök nedenini (encoding vs structure parser) anlamak.
+- **%40:** Git branch yönetimi ve versiyonlar arası geçiş (kullanıcı isteğiyle).
+- **%20:** Kod fixleri.
+
+### 12.6 — Neyi Farklı Yapardım?
+- **Erken "Kötü Veri" Testi:** Sadece düzgün PDF'lerle değil, bozuk/OCR gerektiren PDF'lerle en başta test yapardım.
+- **Format Agnostik Parser:** Structure parser'ı sadece akademik/numaralı formatlara göre değil, CV gibi serbest formatlara göre baştan tasarlardım.
+
+---
+
+## Gelecek Vizyonu ve Teknoloji Yığını (Yol Haritası)
+
+Şu an projeye sıfırdan başlasaydık veya bir sonraki fazda neleri eklerdik:
+
+### A. Gelişmiş Ingestion (Veri Alma)
+- **Vision-Native Parsing (Docling v3):** Klasik PDF okuyucular yerine, dökümanı görsel olarak tarayıp tablo ve formülleri kusursuz Markdown formatına çeviren Docling v3 kullanılır.
+- **Semantic Chunking:** Metinler sabit karakter sayısına göre değil, anlamın değiştiği noktalardan (AI yardımıyla) bölünür.
+
+### B. İndeksleme ve Arama
+- **GraphRAG:** Veriler sadece vektör olarak değil, birbiriyle ilişkili düğümler (nodes) olarak saklanır. Örneğin, bir uçak dökümanında "Motor" ve "Bakım Takvimi" arasındaki ilişki bir graf yapısı olarak tutulur.
+- **Hybrid Search:** Vektör benzerliği (Semantic) + Anahtar kelime (BM25) + Bilgi Grafı (Knowledge Graph) üçlüsünün aynı anda sorgulanması.
+- **Late Interaction (ColBERT v3):** Kelimelerin birbirleriyle olan anlamsal ilişkisini koruyarak, "iğne deliği" kadar küçük detayları devasa dökümanlar içinden bulup çıkarma.
+
+### C. Re-Ranking (Yeniden Sıralama)
+- **BGE-Reranker-v3:** Vektör DB'den dönen ilk 100 sonuç içinden, soruyla en alakalı 5-10 tanesini seçmek için kullanılan çok daha hassas bir çapraz kodlayıcı modeldir.
+
+---
+
+## Mimari ve Tasarım Kararları
+
+Projenin geliştirme sürecinde alınan temel mimari kararlar ve gerekçeleri:
+
+1. **Neden Hierarchical Chunking?**
+   Naif chunking'de "X nelerdir?" gibi sorularda alt maddeler kaybolur. Parent-child yapiyla tum bolum getirilebilir.
+
+2. **Neden Hybrid Search?**
+   Dense search semantik benzerligi, BM25 anahtar kelime eslesmeyi yakalar. RRF ile birlestirilince her iki avantaj alinir.
+
+3. **Neden Query Routing?**
+   "nelerdir/listele" tipi sorularda top-k yerine complete section fetch yaparak eksik madde sorununu tasarimsal olarak cozer.
+
+4. **Neden Coverage Check?**
+   LLM bazen madde atlayabilir. Beklenen vs gercek madde sayisi karsilastirilarak kullaniciya uyari verilir.
+
+5. **Neden Strict System Prompt?**
+   Halusinasyonu onlemek icin LLM'e "SADECE baglamdaki bilgiyi kullan" ve "yoksa 'bulunamadi' de" kurallari zorunlu tutulur.
+
+6. **Neden Incremental Indexing?**
+   Yeni belge eklendiginde tum mevcut chunk'lari tekrar embed etmek O(n) maliyetlidir. Incremental upsert ile sadece yeni chunk'lar islenir.
+
+7. **Neden Extractive QA?**
+   LLM erisimi olmayan ortamlarda (offline/on-prem) da belge sorusu sorulabilsin diye, retrieval sonuclarini dogrudan alinti olarak donduren LLM-free mod eklendi.
+
