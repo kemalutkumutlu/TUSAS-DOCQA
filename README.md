@@ -2,6 +2,50 @@
 
 [![CI](https://github.com/kemalutkumutlu/TUSAS-DOCQA/actions/workflows/ci.yml/badge.svg)](https://github.com/kemalutkumutlu/TUSAS-DOCQA/actions/workflows/ci.yml)
 
+Yapay zeka destekli **Kurumsal Karar Destek ve Belge Analiz** sistemi. Teknik raporlar, dokümanlar ve operasyonel veriler (PDF/Görsel) üzerinde anlama, özetleme ve soru-cevap yetenekleri sunar.
+
+## CI/CD & LLMOps (GitHub Actions)
+
+Workflow: `.github/workflows/ci.yml`
+
+- **Baseline Gate (LLM-free)**: Her push/PR’da core pipeline regresyon kapilarini kosar:
+  - `python scripts/baseline_gate.py`
+  - `python scripts/lang_gate.py`
+- **Case Study Eval (Gemini)**: Sadece `GEMINI_API_KEY` tanimliysa calisir (repo Settings → Secrets/Variables):
+  - `python scripts/eval_case_study.py --pdf Case_Study_20260205.pdf`
+
+> Not: Secret yoksa eval job adimlari otomatik skip edilir.
+
+## Mimari
+
+```
+PDF/Image ─→ Ingestion ─→ Structure ─→ Chunking ─→ Indexing ─→ Retrieval ─→ Generation
+              (PyMuPDF     (Heading      (Parent/     (Chroma +   (Query      (Gemini /
+               + OCR        Detection     Child)      BM25 +      Routing +    Ollama +
+               + (opt)      + Tree)                   RRF)        Section      Guardrails)
+               VLM)                                                  Fetch)
+```
+
+> **Local (Offline) Mod**: `LLM_PROVIDER=local` ve/veya `VLM_PROVIDER=local` ile tum pipeline Ollama uzerinden calisan yerel LLM/VLM'e yonlendirilir. Hicbir dis API cagrisi yapilmaz — savunma sanayii ve air-gapped ortamlar icin uygundur.
+
+### Temel Ozellikler
+
+| Ozellik | Aciklama |
+|---------|----------|
+| **Belge Yukleme** | PDF, JPG, PNG destegi |
+| **Metin Cikarimi** | PDF text-layer + Tesseract OCR + (opsiyonel) Gemini VLM extract-only |
+| **Dual-Quality Secim** | Aynı sayfada birden fazla cikarim adayi varsa (PDF/OCR/VLM), baslik/structure korunumu daha iyi olani secilir |
+| **Hiyerarsik Chunking** | Bolum algılama, parent-child chunk'lar, heading metadata |
+| **Hibrit Arama** | Dense (vector) + Sparse (BM25) + RRF fusion |
+| **Query Routing** | Liste/bolum soruları vs normal QA otomatik ayrimi |
+| **Complete Section Fetch** | Liste sorularinda tum bolum + alt bolumler getirilir |
+| **Coverage Check** | Beklenen madde sayisi vs cevaptaki madde sayisi kontrolu |
+| **Deterministic Section-List** | Uygun oldugunda liste sorulari LLM'e bagli kalmadan, parent section text'inden deterministik listelenir (eksik madde riski azalir) |
+```
+# TUSAS DOCQA — Belge Analiz ve Soru-Cevap Sistemi
+
+[![CI](https://github.com/kemalutkumutlu/TUSAS-DOCQA/actions/workflows/ci.yml/badge.svg)](https://github.com/kemalutkumutlu/TUSAS-DOCQA/actions/workflows/ci.yml)
+
 Yapay zeka destekli **Belge Analiz ve Soru-Cevap** sistemi. PDF ve gorsel belgeleri yukleyerek doğal dil ile soru sorun, kaynakli ve dogrulanmis cevaplar alin.
 
 ## CI (GitHub Actions)
@@ -45,10 +89,14 @@ PDF/Image ─→ Ingestion ─→ Structure ─→ Chunking ─→ Indexing ─�
 | **Citation** | Her bilgi cumlesine [DosyaAdi - Sayfa X] referansi |
 | **Coklu Belge + Izolasyon** | Tek session'da birden fazla belge; retrieval doc_id ile izole edilir (cross-doc contamination onlenir) |
 | **Aktif Belge** | Birden fazla belge yuklendiginde `/use <dosya>` ile hedef belge secilir (varsayilan: son yuklenen) |
+| **Runtime UI Ayarlari** | Arayuzden `Embedding Model/Device`, `VLM Mode/Provider/Max Pages` secilip canli guncellenebilir |
+| **Belge Durumu Paneli** | Sidebar'da aktif/yuklu belge + LLM/Embedding/VLM runtime durumu gosterilir |
 | **Incremental Indexing** | Yeni belge eklendiginde sadece yeni chunk'lar embed edilir; onceki belgeler tekrar islenmez |
 | **LLM-Free Extractive QA** | `LLM_PROVIDER=none` ile LLM olmadan belgeden dogrudan alinti bazli cevap (embedding + retrieval yeterli) |
 | **Local (Offline) Mod** | `LLM_PROVIDER=local` + `VLM_PROVIDER=local` ile Ollama uzerinden tamamen yerel LLM/VLM. Dis API yok, air-gapped ortam destegi |
+| **Edge / Kısıtlı Donanım** | 4-bit quantization (Q4) desteği ile tüketici sınıfı donanımlarda (örn. 6GB VRAM GPU) çalışabilir mimari |
 | **Observability** | Index build, retrieval ve generation sureleri event log'a kaydedilir (`RAG_LOG=1`) |
+| **Otomatik Değerlendirme (LLMOps)** | CI pipeline üzerinde koşan `eval_case_study.py` ile doğruluk, tutarlılık ve halüsinasyon metriklerinin otomatik takibi |
 
 ## Kurulum (Windows)
 
@@ -279,6 +327,10 @@ ollama list
 >
 > **Onemli**: Local mod aktifken `GEMINI_API_KEY` zorunlu degildir. Embedding her zaman lokal SentenceTransformers ile yapilir.
 >
+> **Performans & Mimari**:
+> - **Inference**: Yerel modda bellek verimliliği için **4-bit Quantization (GGUF/AWQ)**, **KV Cache** yönetimi ve **Batching** stratejilerini optimize eden motorlar (Ollama/llama.cpp) kullanılır.
+> - **Mimari**: **Decoder-only Transformer** (Llama/Qwen) modelleri ile **Encoder** (Embedding) modelleri hibrit çalışır.
+>
 > **Mod farklari**:
 > | Ayar | Online (Gemini) | Local (Ollama) | Extractive (none) |
 > |------|-----------------|----------------|--------------------|
@@ -356,11 +408,27 @@ Tarayicida `http://localhost:8000` adresini acin.
 ### UI (Chainlit)
 
 - UI Chainlit tabanlidir ve `.chainlit/config.toml` ile ozellestirilir (tema/logo/custom JS).
+- `custom_css` ile `public/stylesheet.css` yuklenir; arayuz vurgusu mavi yerine daha koyu/teal tona alinmistir.
 - Sol tarafta (desktop genislikte) tarayici `localStorage` icinde tutulan mini **Gecmis Sohbetler** paneli vardir (`public/history_sidebar.js`).
   - Bu panel sadece arayuz kolayligidir; sunucu tarafinda DB/persistence yapmaz.
   - Bir sohbeti tiklayinca istemci, Chainlit'e `/open_thread <id>` komutunu gondererek o thread'in hafizadan yeniden oynatilmasini ister.
+- Sagdaki **Belge Durumu** panelinde su bilgiler anlik gosterilir:
+  - `Mod`, `LLM`
+  - `Embedding` (model + device)
+  - `VLM` (provider + mode + max pages)
+  - `Aktif Belge`, `Yuklu Belgeler`
 - Sol ustteki profil secicisinden LLM profili degistirilebilir: `Gemini` / `OpenAI` / `Local (Ollama)` / `Extractive (LLM yok)`.
   - Profil secimi RAG mimarisini degistirmez; sadece `llm_provider` secimini degistirir (retrieval/indeksleme ayni kalir).
+- Chat ayar panelinden runtime kontrol:
+  - `Embedding Model`: `auto`, `intfloat/multilingual-e5-small`, `intfloat/multilingual-e5-base`
+  - `Embedding Device`: `auto`, `cpu`, `cuda`
+  - `VLM Mode`: `off`, `auto`, `force`
+  - `VLM Provider`: `gemini`, `local`
+  - `VLM Max Pages`: `0-200`
+- Runtime ayar etkisi:
+  - Embedding model/device degisirse yuklu chunk'lar icin index yeniden kurulur.
+  - VLM ayarlari bir sonraki dosya yuklemelerinde uygulanir.
+- UI tarafinda dogal scrollbar gostergeleri gizlenmistir (gorunumu sade tutmak icin).
 
 ### Mod Davranisi (Kisa)
 

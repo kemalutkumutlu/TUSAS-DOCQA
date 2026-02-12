@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from uuid import uuid4
@@ -384,6 +384,73 @@ class RAGPipeline:
     @property
     def total_chunks(self) -> int:
         return len(self._all_chunks)
+
+    def reconfigure_runtime(
+        self,
+        *,
+        embedding_model: Optional[str] = None,
+        embedding_device: Optional[str] = None,
+        vlm_mode: Optional[str] = None,
+        vlm_provider: Optional[str] = None,
+        vlm_max_pages: Optional[int] = None,
+    ) -> Dict[str, bool]:
+        """
+        Update runtime knobs from UI.
+
+        - Embedding model/device changes rebuild the index from loaded chunks.
+        - VLM changes affect future document ingestion (new uploads).
+        """
+        embedding_changed = False
+        model_next = (embedding_model or "").strip()
+        if model_next and model_next != self.embedding_model:
+            self.embedding_model = model_next
+            embedding_changed = True
+
+        device_next = (embedding_device or "").strip().lower()
+        if device_next and device_next != self.embedding_device:
+            self.embedding_device = device_next
+            embedding_changed = True
+
+        if self.vlm_config is None:
+            self.vlm_config = VLMConfig(
+                api_key=self.gemini_api_key,
+                model=self.gemini_model,
+                mode="auto",
+                max_pages=25,
+                provider="gemini",
+                ollama_base_url=(self.ollama_config.base_url if self.ollama_config else "http://localhost:11434"),
+                ollama_vlm_model=(self.ollama_config.vlm_model if self.ollama_config else "llava:7b"),
+                ollama_timeout=(self.ollama_config.timeout if self.ollama_config else 120),
+            )
+
+        vlm_before = self.vlm_config
+        vlm_after = vlm_before
+        if vlm_mode in ("off", "auto", "force"):
+            vlm_after = replace(vlm_after, mode=vlm_mode)
+        if vlm_provider in ("gemini", "local"):
+            vlm_after = replace(vlm_after, provider=vlm_provider)
+        if vlm_max_pages is not None:
+            vlm_after = replace(vlm_after, max_pages=max(0, min(200, int(vlm_max_pages))))
+
+        vlm_changed = vlm_after != vlm_before
+        if vlm_changed:
+            self.vlm_config = vlm_after
+
+        index_rebuilt = False
+        if embedding_changed and self._all_chunks:
+            self._index = LocalIndex.build(
+                chunks=self._all_chunks,
+                chroma_dir=self.chroma_dir,
+                embedding_model=self.embedding_model,
+                embedding_device=self.embedding_device,
+            )
+            index_rebuilt = True
+
+        return {
+            "embedding_changed": embedding_changed,
+            "vlm_changed": vlm_changed,
+            "index_rebuilt": index_rebuilt,
+        }
 
     def ask(self, query: str) -> GenerationResult:
         """

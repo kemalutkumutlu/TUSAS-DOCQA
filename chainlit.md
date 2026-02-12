@@ -40,6 +40,35 @@ Sol ustteki profil secicisinden, bu oturum icin LLM saglayicisini degistirebilir
 
 Bu secim RAG akisini degistirmez; retrieval/indeksleme ayni kalir, sadece generation provider degisir.
 
+## Runtime Ayarlar (UI)
+
+Chat settings panelinden oturum bazli runtime ayarlar degistirilebilir:
+
+- `Embedding Model`: `auto`, `intfloat/multilingual-e5-small`, `intfloat/multilingual-e5-base`
+- `Embedding Device`: `auto`, `cpu`, `cuda`
+- `VLM Mode`: `off`, `auto`, `force`
+- `VLM Provider`: `gemini`, `local`
+- `VLM Max Pages`: `0-200`
+
+Davranis:
+
+- Embedding model/device degisince mevcut yuklu chunk'lar icin index yeniden olusturulur.
+- VLM ayarlari bir sonraki dosya yukleme/isleme adiminda etkili olur.
+
+## Belge Durumu Paneli (UI)
+
+Sagdaki `Belge Durumu` paneli anlik olarak su alanlari gosterir:
+
+- `Mod`, `LLM`
+- `Embedding` (model + device)
+- `VLM` (provider + mode + max pages)
+- `Aktif Belge`, `Yuklu Belgeler`
+
+Notlar:
+
+- Gecmis sohbetten bir thread acildiginda, o thread'in pipeline baglami eslenir; aktif/yuklu belge bilgisi panelde dogru gorunur.
+- Bu baglam esleme server process bellegindedir; server restart sonrasi kalici degildir.
+
 ## Gecmis Sohbetler (UI)
 
 Desktop genislikte sol tarafta mini **Gecmis Sohbetler** paneli gorunur. Bu panel:
@@ -47,6 +76,12 @@ Desktop genislikte sol tarafta mini **Gecmis Sohbetler** paneli gorunur. Bu pane
 - Thread basliklarini tarayici `localStorage` icinde tutar.
 - Bir thread'e tiklayinca `/open_thread <id>` ile sohbeti yeniden oynatir.
 - Sunucu tarafinda DB/persistence yapmaz (sayfa/cihaz degisince paylasim garanti degildir).
+
+## Stil Notu
+
+- `.chainlit/config.toml` icinde `custom_css` ile `public/stylesheet.css` yuklenir.
+- Arayuz vurgu rengi koyu/teal tona alinmistir.
+- Gorunumu sade tutmak icin native/custom scroll bar gostergeleri gizlenmistir.
 
 ## Local (Offline) Mod
 

@@ -40,7 +40,7 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
 
 ## Faz 4 — Query Routing + Complete Section Fetch + Coverage
 - `src/core/retrieval.py`: Tam retrieval pipeline'i
-  - **Query Classification**: Rule-based intent siniflandirici (section_list vs normal_qa)
+  - **Agentic Router (Sorgu Yönlendirici)**: Rule-based intent sınıflandırıcı ile sorguyu analiz eder; "Listeleme Ajanı" veya "QA Ajanı" davranışını seçer.
     - TR/EN pattern'lar: "nelerdir", "listele", "what are the", "list all" vb.
   - **Heading-aware section matching**: Hybrid sonuclarindan en iyi section secimi
     - Heading-query token overlap bonus'u ile "teslimatlar nelerdir" → dogru bolumu bulur
@@ -218,6 +218,15 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - **LLM-only section list vs Deterministic rendering**: LLM bazen madde atliyordu. Deterministic rendering ile LLM'e gitmeden parent chunk text'inden madde cikarimi yapilarak %100 coverage saglandi. LLM yolu sadece deterministic cikarilamadiginda fallback olarak kullaniliyor.
 - **OpenAI vs Gemini**: Her iki API de destekleniyor, ancak Gemini 2.0 Flash'in TR performansi, fiyat/performans orani ve multimodal yeteneginden dolayi varsayilan olarak Gemini secildi. Ayrica Google AI Studio **300$ free credit** verdigi icin (case study suresince) pratik bir tercih oldu.
 
+### RAG vs Fine-Tuning ve Mimari Kararları
+- **Alternatif**: Açık kaynak **Decoder-only Transformer** modellerin (Llama 3, Qwen 2.5) kurum verisiyle **Fine-Tuning** edilmesi.
+- **Yöntemler**: Tam parametre eğitimi pahalı olduğu için **PEFT (LoRA, QLoRA)** adaptasyon yöntemleri ve **PyTorch** tabanlı eğitim pipeline'ları değerlendirildi. İleride insan geri bildirimiyle hizalama için **RLHF** veya **DPO** düşünülebilir.
+- **Karar**: Şu an için **RAG** mimarisi seçildi.
+- **Gerekçe**:
+  - **Dinamik Bilgi**: Dokümanlar sık değişiyor, sürekli fine-tuning (Continuous Pre-training) maliyetli.
+  - **Traceability (İzlenebilirlik)**: Savunma sanayii için cevabın kaynağını (citation) göstermek kritik.
+  - **Donanım**: Eğitim için yüksek VRAM gerekirken, RAG ve **Quantize (4-bit)** inference daha erişilebilir.
+
 ## Zorluklar ve Cozumler
 
 | Zorluk | Etki | Cozum |
@@ -388,6 +397,40 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - `README.md` ve `TESTING.md` tablolari yeni sonuclara gore guncellendi.
 - `GPU_REQUIREMENTS.md` icine local LLM/VLM (Ollama) icin VRAM'in neden kritik olduguna dair notlar eklendi.
 
+## Faz 11 — UI Runtime Ayarlari + Belge Durumu Senkronu (2026-02-12)
+
+### 11.1 — Runtime Ayarlarin Arayuze Tasinmasi
+- `app.py` icine Chainlit `ChatSettings` paneli eklendi.
+- Kullanici artik UI'dan su ayarlari degistirebiliyor:
+  - `Embedding Model`
+  - `Embedding Device`
+  - `VLM Mode`
+  - `VLM Provider`
+  - `VLM Max Pages`
+- `src/core/pipeline.py` icine `reconfigure_runtime()` eklendi:
+  - Embedding model/device degisince yuklu chunk'lar icin index yeniden kurulur.
+  - VLM ayarlari bir sonraki ingestion'da kullanilir.
+
+### 11.2 — Belge Durumu Paneli Genisletmesi
+- Sagdaki `Belge Durumu` paneline ek runtime gorunurlugu eklendi:
+  - `Embedding` (model + device)
+  - `VLM` (provider + mode + max pages)
+- Mevcut alanlar (`Mod`, `LLM`, `Aktif Belge`, `Yuklu Belgeler`) korunarak tek panelde toplandi.
+
+### 11.3 — Thread Gecisinde Aktif/Yuklu Belge Sorunu
+- Problem: Gecmis sohbetten thread acildiginda aktif/yuklu belge bazen `(yok)` gorunuyordu.
+- Kök neden: thread baglami ile session `pipeline` esleme sirasi tutarsizdi.
+- Cozum:
+  - Thread-id bazli in-memory pipeline esleme eklendi.
+  - Message basinda thread marker erken parse edilip dogru pipeline hemen baglaniyor.
+  - Upload akisi mevcut session pipeline'ina sabitlendi.
+- Sonuc: Thread degisiminde belge paneli tutarliligi artti (server process acik kaldigi surece).
+
+### 11.4 — UI Polishing
+- Sol mavi vurgu tonlari koyu/teal tema ile guncellendi (`public/theme.json`, `public/stylesheet.css`, `public/history_sidebar.js`).
+- `custom_css` aktif hale getirildi (`.chainlit/config.toml`).
+- Gorunumdeki rahatsiz edici scroll bar gostergeleri CSS ile gizlendi.
+
 ## Sonraki Adimlar
 - ~~Retrieval kalitesi icin mini eval set + metrikler~~ -> TAMAM (Faz 7.2)
 - ~~CI/CD pipeline (GitHub Actions)~~ -> TAMAM (Faz 7.1)
@@ -400,3 +443,34 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - ~~Tamamen yerel/offline mod (Ollama)~~ -> TAMAM (Faz 10)
 - Demo video
 - Reranker (cross-encoder) degerlendirmesi (Roadmap'te)
+
+## Faz 12 — CV ve Bozuk PDF İyileştirmeleri (2026-02-13)
+
+### 12.1 — Problem Tanımı
+Kullanıcı `CV-ornek-muhendis.pdf` yüklediğinde iki kritik sorunla karşılaşıldı:
+1. **Encoding Bozukluğu**: PDF text layer'ında Türkçe karakterler bozuk çıkıyordu (`İ` yerine `` vb.).
+2. **Yapısal Başarısızlık**: "İŞ DENEYİMİ" gibi bölümler, numarasız oldukları için `structure.py` tarafından başlık olarak algılanmadı ve tek bir koca chunk (Root) oluştu.
+3. **VLM Force Hatası**: Kullanıcı `VLM Modu: Force` seçmesine rağmen, kodun `ingest_pdf` içindeki bir mantık hatası nedeniyle sistem hala (bozuk olan) PDF text layer'ını "daha iyi yapıya sahip" diye seçiyordu.
+
+### 12.2 — Çözümler
+- **VLM Force Fix**: `src/core/ingestion.py` güncellendi. Eğer `vlm.mode == "force"` ise, VLM çıktısı **tartışmasız** kabul edilir (karşılaştırma bypass edilir).
+- **Otomatik Encoding Check**: `_text_quality_low` fonksiyonuna `` (replacement character) kontrolü eklendi. Artık PDF metninde bozuk karakter oranı yüksekse, `auto` modunda bile otomatik OCR/VLM devreye giriyor.
+- **CV Structure Support**: `src/core/structure.py` güncellendi.
+    - **Keyword Heading**: "İŞ DENEYİMİ", "EĞİTİM", "BECERİLER", "PROJECTS" vb. 30+ yaygın CV başlığı tanımlandı.
+    - **Esnek ALLCAPS**: Numarasız ama büyük harfli kısa satırlar (belirli kurallarla) başlık olarak kabul edildi.
+    - **Tarih Koruması**: "2015 - Halen" gibi satırların başlık sanılmasını önlemek için 4 haneli yıl (1900-2100) kontrolü eklendi.
+
+### 12.3 — Retrospektif: Neyi Farklı Yapardım?
+Kullanıcının sorusu üzerine bu süreci değerlendirdik:
+
+**Hangi yaklaşımlar denendi ve işe yaramadı?**
+1. **Sadece VLM'i Force Moduna Almak**: İşe yaramadı çünkü kodda `_pick_best_candidate` fonksiyonu, VLM çıktısını yine de (bozuk ama satır yapısı düzgün olan) PDF text ile kıyaslayıp eliyordu.
+2. **Text Quality Heuristic (Eski)**: Sadece uzunluk ve "tek tokenli satır" oranına bakıyordu. Encoding bozukluğunu (karakter bazlı) algılayamadığı için `auto` mod devreye girmedi.
+
+**Neyi farklı yapardım?**
+1. **Erken VLM Validasyonu**: VLM entegrasyonunu yaparken "force" modunun *gerçekten* force ettiğini, bozuk bir PDF ile test etmeliydim. Happy-path (düzgün PDF) testleri bu bug'ı gizledi.
+2. **CV Formatını Baştan Düşünmek**: Yapısal analiz modülünü (`structure.py`) tasarlarken sadece akademik/teknik raporları (numaralı başlıklar) baz aldım. CV, Sözleşme, Broşür gibi "numarasız başlık" kullanan belgeleri en baştan hesaba katmalıydım.
+3. **Encoding Kontrolü**: `` karakteri PDF dünyasında çok yaygındır (özellikle Türkçe fontlarda). Bunu kalite kontrolüne en baştan eklemeliydim.
+
+Bu iyileştirmelerle sistem artık **belge tipi agnostik** (CV, Rapor, Makale) ve **encoding hatalarına dayanıklı** hale geldi.
+

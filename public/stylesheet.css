@@ -2,17 +2,17 @@
    Goal: better spacing/contrast, corporate feel, no layout breakage. */
 
 :root {
-  --tusas-accent: #3b82f6; /* blue */
+  --tusas-accent: #14b8a6; /* teal */
   --tusas-bg: #0b1220;     /* deep navy */
-  --tusas-panel: #0f1b32;
+  --tusas-panel: #121926;
   --tusas-text: #e5e7eb;
   --tusas-muted: #9ca3af;
 }
 
 /* Background + typography */
 body {
-  background: radial-gradient(1200px 600px at 20% -10%, rgba(59, 130, 246, 0.25), transparent 60%),
-              radial-gradient(1000px 500px at 90% 0%, rgba(56, 189, 248, 0.18), transparent 55%),
+  background: radial-gradient(1200px 600px at 20% -10%, rgba(20, 184, 166, 0.20), transparent 60%),
+              radial-gradient(1000px 500px at 90% 0%, rgba(13, 148, 136, 0.16), transparent 55%),
               var(--tusas-bg) !important;
 }
 
@@ -52,12 +52,37 @@ button, .cl-action-button {
 
 /* Subtle accent for links / code */
 a {
-  color: #93c5fd;
+  color: #5eead4;
 }
 
 code {
   background: rgba(255,255,255,0.06);
   padding: 2px 6px;
   border-radius: 8px;
+}
+
+/* Hide native scrollbars (keep wheel/touch scrolling) */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: transparent !important;
+}
+
+/* Chainlit/Mantine custom scrollbars */
+.mantine-ScrollArea-scrollbar,
+.mantine-ScrollArea-thumb,
+[data-radix-scroll-area-scrollbar],
+[data-radix-scroll-area-thumb] {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 

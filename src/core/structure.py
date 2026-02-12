@@ -40,9 +40,53 @@ class SectionNode:
         return self.title.strip()
 
 
+
+_CV_KEYWORDS = {
+    "İŞ DENEYİMİ", "DENEYİM", "EĞİTİM", "EĞİTİM BİLGİLERİ", "YETENEKLER", "BECERİLER",
+    "REFERANSLAR", "PROJELER", "SERTİFİKALAR", "KURSLAR", "YAYINLAR", "ÖDÜLLER",
+    "KİŞİSEL BİLGİLER", "İLETİŞİM", "ÖZET", "HAKKINDA", "YABANCI DİL", "DİLLER", "HOBİLER",
+    "EXPERIENCE", "WORK EXPERIENCE", "EDUCATION", "SKILLS", "PROJECTS", "REFERENCES",
+    "CERTIFICATES", "AWARDS", "PUBLICATIONS", "SUMMARY", "ABOUT", "LANGUAGES", "HOBBIES",
+    "PERSONAL INFORMATION", "CONTACT",
+}
+
 _RE_NUM_DOT = re.compile(r"^(?P<num>\d+(?:\.\d+)*)\.\s+(?P<title>.+?)\s*$")
 _RE_NUM_DASH = re.compile(r"^(?P<num>\d+(?:\.\d+)*)\s*[-–—]\s*(?P<title>.+?)\s*$")
 _RE_ALPHA_NUM = re.compile(r"^(?P<alpha>[A-Z])\.(?P<num>\d+(?:\.\d+)*)\s+(?P<title>.+?)\s*$")
+
+def _is_allcaps_heading(s: str) -> bool:
+    """
+    Conservative, document-agnostic fallback for heading detection.
+    
+    Moved from build_section_tree so it can be used globally or in detect_heading.
+    """
+    t = s.strip()
+    if not t:
+        return False
+    if any(ch.isdigit() for ch in t):
+        return False
+    # CV headings can be short (e.g. "ÖZET")
+    if len(t) < 3 or len(t) > 60:
+        return False
+    if t.endswith((".", "!", "?", ":", ";", ",")):
+        return False
+    # Token count: avoid treating long sentences as headings
+    toks = [x for x in re.split(r"\s+", t) if x]
+    if len(toks) > 6:
+        return False
+    
+    letters = [ch for ch in t if ch.isalpha()]
+    if len(letters) < 3:
+        return False
+    
+    # Check for known keywords first - if it's a known keyword, we are more lenient
+    upper_t = t.upper().replace("İ", "I") # simplistic TR normalization for key check
+    if any(k in upper_t for k in _CV_KEYWORDS):
+        return True
+
+    upper = sum(1 for ch in letters if ch.isupper())
+    # Require strong uppercase ratio (allow some noise)
+    return (upper / max(1, len(letters))) >= 0.85
 
 
 def _heading_level_from_key(key: str) -> int:
@@ -94,9 +138,21 @@ def detect_heading(line: str) -> Optional[Heading]:
         # - Reject headings where the "title" starts with a digit (often date ranges like "03-04-1987")
         if title_raw[:1].isdigit():
             return None
+        
+        # Reject years incorrectly identified as numbered headings (e.g. "2015 - Present")
+        if key.isdigit() and len(key) == 4 and (1900 <= int(key) <= 2100):
+            return None
+
         level = _heading_level_from_key(key)
         title = f"{key} - {title_raw}"
+        title = f"{key} - {title_raw}"
         return Heading(key=key, title=title, level=level)
+
+    # Fallback: Check for CV-style headings (block uppercase or keywords)
+    # Only if line looks like a heading and is distinct
+    if _is_allcaps_heading(s):
+        # Treat these as level 1 headings (comparable to "1. Title")
+        return Heading(key=None, title=s, level=1)
 
     return None
 
@@ -154,47 +210,16 @@ def build_section_tree(ingest: IngestResult) -> SectionNode:
     lines = _iter_page_lines(pages)
     boilerplate = _detect_boilerplate(lines, pages_count=len(pages))
 
-    def _is_allcaps_heading(s: str) -> bool:
-        """
-        Conservative, document-agnostic fallback for heading detection.
-
-        Only used when numbered heading detection yields too few headings.
-        Intuition: many documents use ALLCAPS section labels (e.g., "INTRODUCTION"),
-        which deterministic numbered regexes won't catch.
-        """
-        t = s.strip()
-        if not t:
-            return False
-        if any(ch.isdigit() for ch in t):
-            return False
-        if len(t) < 3 or len(t) > 40:
-            return False
-        if t.endswith((".", "!", "?", ":", ";")):
-            return False
-        # Token count: avoid treating long sentences as headings
-        toks = [x for x in re.split(r"\s+", t) if x]
-        if len(toks) > 6:
-            return False
-        letters = [ch for ch in t if ch.isalpha()]
-        if len(letters) < 3:
-            return False
-        upper = sum(1 for ch in letters if ch.isupper())
-        # Require strong uppercase ratio, but not necessarily perfect (Turkish casing etc.)
-        return (upper / max(1, len(letters))) >= 0.85
-
     # Decide whether to enable ALLCAPS heading fallback.
-    numbered_headings = 0
-    allcaps_candidates = 0
-    for ln in lines:
-        if ln.text in boilerplate:
-            continue
-        if not ln.text:
-            continue
-        if detect_heading(ln.text) is not None:
-            numbered_headings += 1
-        if _is_allcaps_heading(ln.text):
-            allcaps_candidates += 1
-    enable_allcaps = numbered_headings < 2 and allcaps_candidates >= 2
+    # UPDATE: We now handle allcaps inside detect_heading, but we might want to restrict it
+    # if the document is overwhelmingly numbered structures.
+    # However, since detect_heading now returns Heading objects for allcaps,
+    # we don't need this complex pre-pass logic anymore. 
+    # Valid numbered headings invoke detect_heading -> Heading(key=...)
+    # Valid CV headings invoke detect_heading -> Heading(key=None...)
+    
+    # OLD LOGIC REMOVED: enable_allcaps = numbered_headings < 2 ...
+
 
     root = SectionNode(
         section_id="root",
@@ -242,8 +267,9 @@ def build_section_tree(ingest: IngestResult) -> SectionNode:
             continue
 
         h = detect_heading(ln.text)
-        if h is None and enable_allcaps and _is_allcaps_heading(ln.text):
-            h = Heading(key=None, title=ln.text.strip(), level=1)
+        if h is None:
+             # Legacy fallback removed, handled inside detect_heading now.
+             pass
         if h is not None:
             # Adjust stack for heading level
             while len(stack) > 1 and stack[-1].level >= h.level:

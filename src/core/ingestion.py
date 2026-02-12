@@ -40,6 +40,16 @@ def _text_quality_low(text: str) -> bool:
     single_token_lines = sum(1 for ln in lines if len(ln.split()) <= 1 and len(ln) < 40)
     if single_token_lines / max(1, len(lines)) > 0.55:
         return True
+    
+    # Check for encoding corruption (common in PDF text layers).
+    # If we see replacement characters (\ufffd), it's a strong sign of broken text.
+    if "\ufffd" in t:
+        # If >1% of chars are replacement chars, or if there are many of them, fail.
+        # For a short text, even 1 is suspicious, but let's be slightly conservative.
+        count = t.count("\ufffd")
+        if count > 3 or (count / len(t) > 0.01):
+            return True
+
     return False
 
 
@@ -280,8 +290,12 @@ def ingest_pdf(
                         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                         vlm_text = extract_text_from_image(img, cfg=vlm)
                         vlm_text_norm = normalize_whitespace(vlm_text)
-                        # Dual-quality selection: keep whichever preserves structure better.
-                        text_norm, source = _pick_best_candidate([(text_norm, source), (vlm_text_norm, "vlm")])
+                        if vlm.mode == "force":
+                            # FORCE mode: trust VLM blindly, do not compare with PDF text
+                            text_norm, source = vlm_text_norm, "vlm"
+                        else:
+                            # AUTO mode: compare structure (useful if VLM hallucinates or PDF is actually good)
+                            text_norm, source = _pick_best_candidate([(text_norm, source), (vlm_text_norm, "vlm")])
                         vlm_pages_used += 1
                 except Exception as e:  # noqa: BLE001
                     warnings.append(f"VLM failed on page {page_no}: {e}")
@@ -363,9 +377,15 @@ def ingest_image(
             warnings.append("Image ingestion produced empty text.")
         text_norm, source = "", "image_ocr"
     else:
-        # Prefer whichever preserves structure best. This is safe because the
-        # original OCR/VLM candidates are still present; switching requires score gain.
-        text_norm, source = _pick_best_candidate(cands)
+        # If VLM force was used, we might have multiple candidates but we want to ENFORCE VLM.
+        # However, the loop above `if vlm and ...` creates the first candidate.
+        # Let's check if we have a VLM candidate and force mode is on.
+        vlm_cand = next((c for c in cands if c[1] == "vlm"), None)
+        if vlm and vlm.mode == "force" and vlm_cand:
+            text_norm, source = vlm_cand
+        else:
+            # Prefer whichever preserves structure best.
+            text_norm, source = _pick_best_candidate(cands)
 
     pages = [
         PageText(

@@ -15,6 +15,7 @@ from queue import Empty, SimpleQueue
 from pathlib import Path
 
 import chainlit as cl
+from chainlit.input_widget import Select, Slider
 
 from src.config import load_settings
 from src.core.ingestion import OCRConfig
@@ -33,7 +34,9 @@ _EXIT_LOCK = asyncio.Lock()
 _THREAD_TAG_RE = re.compile(r"^<!--THREAD:([A-Za-z0-9:_\-.]+)-->\s*")
 _OPEN_THREAD_CMD_RE = re.compile(r"^/open_thread(?:\s+([A-Za-z0-9:_\-.]+))?\s*$", re.IGNORECASE)
 _THREAD_MEMORY: dict[str, list[dict[str, str]]] = {}
+_THREAD_PIPELINES: dict[str, RAGPipeline] = {}
 _THREAD_MEMORY_MAX_MSGS = 120
+_SIDEBAR_REV_KEY = "sidebar_render_rev"
 
 
 def _auto_exit_enabled() -> bool:
@@ -72,6 +75,48 @@ def _thread_memory_add(thread_id: str | None, role: str, content: str) -> None:
     if len(buf) > _THREAD_MEMORY_MAX_MSGS:
         buf = buf[-_THREAD_MEMORY_MAX_MSGS:]
     _THREAD_MEMORY[tid] = buf
+
+
+def _thread_pipeline_get(thread_id: str | None) -> RAGPipeline | None:
+    tid = (thread_id or "").strip()
+    if not tid:
+        return None
+    return _THREAD_PIPELINES.get(tid)
+
+
+def _thread_pipeline_set(thread_id: str | None, pipeline: RAGPipeline | None) -> None:
+    tid = (thread_id or "").strip()
+    if not tid or pipeline is None:
+        return
+    _THREAD_PIPELINES[tid] = pipeline
+
+
+def _resolve_sidebar_pipeline(preferred: RAGPipeline | None = None) -> RAGPipeline | None:
+    # When an explicit pipeline is passed (e.g. after file upload), prefer it
+    # over thread pipeline — the caller has the most up-to-date reference.
+    if preferred is not None:
+        return preferred
+
+    active_tid = (cl.user_session.get("ui_thread_id") or "").strip()
+    if active_tid:
+        thread_pipeline = _thread_pipeline_get(active_tid)
+        if thread_pipeline is not None:
+            return thread_pipeline
+
+    session_pipeline = cl.user_session.get("pipeline")
+    if session_pipeline is not None:
+        return session_pipeline
+
+    return None
+
+
+def _next_sidebar_rev() -> int:
+    cur = cl.user_session.get(_SIDEBAR_REV_KEY)
+    if not isinstance(cur, int):
+        cur = 0
+    cur += 1
+    cl.user_session.set(_SIDEBAR_REV_KEY, cur)
+    return cur
 
 
 async def _cancel_exit_task() -> None:
@@ -179,6 +224,17 @@ _CHAT_PROFILE_TO_PROVIDER = {
 }
 _CHAT_HISTORY_KEY = "recent_user_messages"
 _CHAT_HISTORY_MAX = 12
+_RUNTIME_OVERRIDES_KEY = "runtime_overrides"
+_EMBEDDING_MODEL_PRESETS = [
+    "auto",
+    "intfloat/multilingual-e5-small",
+    "intfloat/multilingual-e5-base",
+]
+_EMBEDDING_DEVICE_VALUES = ["auto", "cpu", "cuda"]
+_VLM_MODE_VALUES = ["off", "auto", "force"]
+_VLM_PROVIDER_VALUES = ["gemini", "local"]
+_VLM_MAX_PAGES_LIMIT = 200
+_VLM_MAX_PAGES_DEFAULT = 25
 
 
 def _get_cached_settings():
@@ -196,6 +252,146 @@ def _default_profile_name() -> str:
         if profile_provider == provider:
             return profile_name
     return "Gemini"
+
+
+def _cuda_available() -> bool:
+    try:
+        import torch  # noqa: WPS433
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _clamp_int(value, default: int, min_value: int, max_value: int) -> int:
+    try:
+        parsed = int(float(value))
+    except Exception:
+        parsed = default
+    return max(min_value, min(max_value, parsed))
+
+
+def _sanitize_select_value(value, allowed: list[str], fallback: str) -> str:
+    text = (str(value or "")).strip().lower()
+    if text in allowed:
+        return text
+    return fallback
+
+
+def _resolve_embedding_model_choice(choice: str, embedding_device: str) -> str:
+    selected = (choice or "").strip().lower()
+    if selected == "auto":
+        use_cuda = _cuda_available() and embedding_device != "cpu"
+        return "intfloat/multilingual-e5-base" if use_cuda else "intfloat/multilingual-e5-small"
+    return (choice or "").strip()
+
+
+def _runtime_overrides() -> dict:
+    raw = cl.user_session.get(_RUNTIME_OVERRIDES_KEY)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _get_runtime_value(key: str, fallback):
+    return _runtime_overrides().get(key, fallback)
+
+
+def _settings_widgets(pipeline: RAGPipeline) -> list:
+    vlm_cfg = pipeline.vlm_config
+    embedding_device_current = _sanitize_select_value(
+        _get_runtime_value("embedding_device", pipeline.embedding_device),
+        _EMBEDDING_DEVICE_VALUES,
+        "auto",
+    )
+    embedding_choice_current = str(
+        _get_runtime_value("embedding_model_choice", pipeline.embedding_model)
+    ).strip()
+    embedding_values = list(_EMBEDDING_MODEL_PRESETS)
+    if pipeline.embedding_model not in embedding_values:
+        embedding_values.append(pipeline.embedding_model)
+    if embedding_choice_current and embedding_choice_current not in embedding_values:
+        embedding_values.append(embedding_choice_current)
+    if not embedding_choice_current:
+        embedding_choice_current = pipeline.embedding_model
+
+    vlm_mode_current = _sanitize_select_value(
+        _get_runtime_value("vlm_mode", vlm_cfg.mode if vlm_cfg else "auto"),
+        _VLM_MODE_VALUES,
+        vlm_cfg.mode if vlm_cfg else "auto",
+    )
+    vlm_provider_current = _sanitize_select_value(
+        _get_runtime_value("vlm_provider", vlm_cfg.provider if vlm_cfg else "gemini"),
+        _VLM_PROVIDER_VALUES,
+        vlm_cfg.provider if vlm_cfg else "gemini",
+    )
+    vlm_pages_current = _clamp_int(
+        _get_runtime_value("vlm_max_pages", vlm_cfg.max_pages if vlm_cfg else _VLM_MAX_PAGES_DEFAULT),
+        vlm_cfg.max_pages if vlm_cfg else _VLM_MAX_PAGES_DEFAULT,
+        0,
+        _VLM_MAX_PAGES_LIMIT,
+    )
+
+    return [
+        Select(
+            id="embedding_model",
+            label="Embedding Model",
+            values=embedding_values,
+            initial_value=embedding_choice_current,
+            description="auto: CUDA varsa e5-base, yoksa e5-small secilir.",
+        ),
+        Select(
+            id="embedding_device",
+            label="Embedding Device",
+            values=_EMBEDDING_DEVICE_VALUES,
+            initial_value=embedding_device_current,
+        ),
+        Select(
+            id="vlm_mode",
+            label="VLM Mode",
+            values=_VLM_MODE_VALUES,
+            initial_value=vlm_mode_current,
+        ),
+        Select(
+            id="vlm_provider",
+            label="VLM Provider",
+            values=_VLM_PROVIDER_VALUES,
+            initial_value=vlm_provider_current,
+        ),
+        Slider(
+            id="vlm_max_pages",
+            label="VLM Max Pages",
+            initial=float(vlm_pages_current),
+            min=0,
+            max=_VLM_MAX_PAGES_LIMIT,
+            step=1,
+        ),
+    ]
+
+
+def _apply_runtime_overrides_to_pipeline(pipeline: RAGPipeline) -> None:
+    overrides = _runtime_overrides()
+    if not overrides:
+        return
+
+    device = _sanitize_select_value(
+        overrides.get("embedding_device", pipeline.embedding_device),
+        _EMBEDDING_DEVICE_VALUES,
+        pipeline.embedding_device,
+    )
+    model_choice = str(overrides.get("embedding_model_choice", pipeline.embedding_model)).strip()
+    model_resolved = _resolve_embedding_model_choice(model_choice, device) or pipeline.embedding_model
+
+    vlm_cfg = pipeline.vlm_config
+    vlm_mode_default = vlm_cfg.mode if vlm_cfg else "auto"
+    vlm_provider_default = vlm_cfg.provider if vlm_cfg else "gemini"
+    vlm_pages_default = vlm_cfg.max_pages if vlm_cfg else _VLM_MAX_PAGES_DEFAULT
+
+    pipeline.reconfigure_runtime(
+        embedding_model=model_resolved,
+        embedding_device=device,
+        vlm_mode=_sanitize_select_value(overrides.get("vlm_mode"), _VLM_MODE_VALUES, vlm_mode_default),
+        vlm_provider=_sanitize_select_value(overrides.get("vlm_provider"), _VLM_PROVIDER_VALUES, vlm_provider_default),
+        vlm_max_pages=_clamp_int(overrides.get("vlm_max_pages"), vlm_pages_default, 0, _VLM_MAX_PAGES_LIMIT),
+    )
 
 
 def _active_llm_model(pipeline: RAGPipeline | None) -> str:
@@ -416,6 +612,7 @@ def _get_pipeline() -> RAGPipeline:
             openai_api_key=settings.openai_api_key,
             openai_model=settings.openai_model,
         )
+        _apply_runtime_overrides_to_pipeline(pipeline)
         cl.user_session.set("pipeline", pipeline)
     return pipeline
 
@@ -498,6 +695,79 @@ async def on_chat_start():
     # Intentionally no auto welcome message to avoid initial layout jump in UI.
     if profile_warning:
         await cl.Message(content=profile_warning).send()
+    await cl.ChatSettings(_settings_widgets(pipeline)).send()
+    await _update_documents_sidebar(pipeline)
+
+
+@cl.on_settings_update
+async def on_settings_update(values: dict):
+    pipeline: RAGPipeline | None = cl.user_session.get("pipeline")
+    if not pipeline:
+        pipeline = _get_pipeline()
+
+    current_vlm = pipeline.vlm_config
+    current_pages = current_vlm.max_pages if current_vlm else _VLM_MAX_PAGES_DEFAULT
+
+    selected_device = _sanitize_select_value(
+        values.get("embedding_device"),
+        _EMBEDDING_DEVICE_VALUES,
+        pipeline.embedding_device,
+    )
+    selected_model_choice = str(values.get("embedding_model") or pipeline.embedding_model).strip()
+    if not selected_model_choice:
+        selected_model_choice = pipeline.embedding_model
+    resolved_model = _resolve_embedding_model_choice(selected_model_choice, selected_device) or pipeline.embedding_model
+
+    selected_vlm_mode = _sanitize_select_value(
+        values.get("vlm_mode"),
+        _VLM_MODE_VALUES,
+        current_vlm.mode if current_vlm else "auto",
+    )
+    selected_vlm_provider = _sanitize_select_value(
+        values.get("vlm_provider"),
+        _VLM_PROVIDER_VALUES,
+        current_vlm.provider if current_vlm else "gemini",
+    )
+    selected_vlm_pages = _clamp_int(
+        values.get("vlm_max_pages"),
+        current_pages,
+        0,
+        _VLM_MAX_PAGES_LIMIT,
+    )
+
+    cl.user_session.set(
+        _RUNTIME_OVERRIDES_KEY,
+        {
+            "embedding_model_choice": selected_model_choice,
+            "embedding_device": selected_device,
+            "vlm_mode": selected_vlm_mode,
+            "vlm_provider": selected_vlm_provider,
+            "vlm_max_pages": selected_vlm_pages,
+        },
+    )
+
+    result = pipeline.reconfigure_runtime(
+        embedding_model=resolved_model,
+        embedding_device=selected_device,
+        vlm_mode=selected_vlm_mode,
+        vlm_provider=selected_vlm_provider,
+        vlm_max_pages=selected_vlm_pages,
+    )
+
+    if result.get("embedding_changed") or result.get("vlm_changed"):
+        messages = [
+            "**Runtime ayarlari guncellendi**",
+            f"- Embedding: `{pipeline.embedding_model}` | `{pipeline.embedding_device}`",
+            f"- VLM: `{selected_vlm_provider}` | `{selected_vlm_mode}` | max_pages=`{selected_vlm_pages}`",
+        ]
+        if result.get("index_rebuilt"):
+            messages.append("- Mevcut dokumanlar icin embedding indeksi yeniden olusturuldu.")
+        elif result.get("embedding_changed"):
+            messages.append("- Embedding ayari degisti; indeks yeni ayarlarla hazir.")
+        if result.get("vlm_changed"):
+            messages.append("- VLM ayarlari bir sonraki dosya yuklemelerinde uygulanir.")
+        await cl.Message(content="\n".join(messages)).send()
+
     await _update_documents_sidebar(pipeline)
 
 
@@ -516,18 +786,18 @@ async def on_chat_end() -> None:
             await _schedule_auto_exit_if_idle()
 
 
-def _process_uploaded_file_sync(file_path: str, file_name: str) -> str:
+def _process_uploaded_file_sync(file_path: str, file_name: str, pipeline: RAGPipeline) -> str:
     """Sync wrapper for file processing (called via make_async)."""
-    return _process_uploaded_file_sync_with_progress(file_path, file_name, None)
+    return _process_uploaded_file_sync_with_progress(file_path, file_name, pipeline, None)
 
 
 def _process_uploaded_file_sync_with_progress(
     file_path: str,
     file_name: str,
+    pipeline: RAGPipeline,
     progress_callback=None,
 ) -> str:
     """Sync file processing with optional progress callback."""
-    pipeline = _get_pipeline()
     path = Path(file_path)
 
     try:
@@ -568,28 +838,32 @@ async def _update_documents_sidebar(pipeline: RAGPipeline | None = None) -> None
     UI-only helper; does not affect retrieval/generation logic.
     """
     try:
-        if pipeline is None:
-            pipeline = cl.user_session.get("pipeline")
+        pipeline = _resolve_sidebar_pipeline(pipeline)
 
         mode = cl.user_session.get("mode") or "doc"
         docs = pipeline.list_documents() if pipeline else []
         active = pipeline.active_document_name if pipeline else None
         llm_provider = (pipeline.llm_provider if pipeline else "gemini") or "gemini"
         llm_model = _active_llm_model(pipeline)
+        embedding_model = pipeline.embedding_model if pipeline else "-"
+        embedding_device = pipeline.embedding_device if pipeline else "-"
+        vlm_provider = (pipeline.vlm_config.provider if (pipeline and pipeline.vlm_config) else "-")
+        vlm_mode = (pipeline.vlm_config.mode if (pipeline and pipeline.vlm_config) else "-")
+        vlm_max_pages = (pipeline.vlm_config.max_pages if (pipeline and pipeline.vlm_config) else "-")
+
+        print(
+            f"[ui] sidebar update: docs={docs}, active={active}, mode={mode}",
+            flush=True,
+        )
 
         lines = [
             f"**Mod**: `{mode}`",
             f"**LLM**: `{llm_provider}` | `{llm_model}`",
-            f"**Aktif Belge**: `{active}`" if active else "**Aktif Belge**: `(yok)`",
+            f"**Embedding**: `{embedding_model}` | `{embedding_device}`",
+            f"**VLM**: `{vlm_provider}` | `{vlm_mode}` | pages `{vlm_max_pages}`",
             "",
-            "**Yuklu Belgeler**",
         ]
-        if docs:
-            for name in docs:
-                marker = "->" if active and name == active else "-"
-                lines.append(f"{marker} {name}")
-        else:
-            lines.append("- (yok)")
+        
 
         lines.extend(
             [
@@ -610,8 +884,11 @@ async def _update_documents_sidebar(pipeline: RAGPipeline | None = None) -> None
                 )
             ]
         )
-    except Exception:
+    except Exception as err:
         # Sidebar updates are best-effort and must not break chat flow.
+        import traceback
+        print(f"[ui] sidebar update failed: {err}", flush=True)
+        traceback.print_exc()
         return
 
 
@@ -788,6 +1065,10 @@ async def _stream_doc_answer_live(
 
 
 async def _process_uploaded_file_with_progress(file_path: str, file_name: str) -> str:
+    pipeline: RAGPipeline | None = cl.user_session.get("pipeline")
+    if pipeline is None:
+        pipeline = _get_pipeline()
+
     progress_queue: SimpleQueue[str] = SimpleQueue()
     seen_steps: list[str] = []
     in_progress = "Dosya alindi, islem baslatiliyor..."
@@ -802,6 +1083,7 @@ async def _process_uploaded_file_with_progress(file_path: str, file_name: str) -
         cl.make_async(_process_uploaded_file_sync_with_progress)(
             file_path,
             file_name,
+            pipeline,
             _on_progress,
         )
     )
@@ -843,6 +1125,7 @@ async def _process_uploaded_file_with_progress(file_path: str, file_name: str) -
         summary=status,
     )
     await progress_msg.update()
+    cl.user_session.set("pipeline", pipeline)
     return status
 
 
@@ -892,9 +1175,23 @@ async def on_retry_last(action: cl.Action):
 async def on_message(message: cl.Message):
     pipeline: RAGPipeline | None = cl.user_session.get("pipeline")
     mode: str = cl.user_session.get("mode") or "doc"
+    raw_query = (message.content or "").strip()
+    hinted_thread_id, _ = _extract_thread_marker(raw_query) if raw_query else (None, "")
+    if hinted_thread_id:
+        cl.user_session.set("ui_thread_id", hinted_thread_id)
+    active_ui_thread_id = (cl.user_session.get("ui_thread_id") or "").strip() or None
+    if active_ui_thread_id:
+        pipeline_for_thread = _thread_pipeline_get(active_ui_thread_id)
+        if pipeline_for_thread is not None and pipeline_for_thread is not pipeline:
+            pipeline = pipeline_for_thread
+            cl.user_session.set("pipeline", pipeline)
 
     # Check for file attachments in the message
     if message.elements:
+        if not pipeline:
+            pipeline = _get_pipeline()
+            cl.user_session.set("pipeline", pipeline)
+        _thread_pipeline_set(active_ui_thread_id, pipeline)
         handled_any = False
         for elem in message.elements:
             file_path, file_name = _extract_uploaded_file_info(elem)
@@ -902,6 +1199,7 @@ async def on_message(message: cl.Message):
                 handled_any = True
                 await _process_uploaded_file_with_progress(file_path, file_name)
                 pipeline = cl.user_session.get("pipeline")
+                _thread_pipeline_set(active_ui_thread_id, pipeline)
                 await _update_documents_sidebar(pipeline)
         if not handled_any:
             await cl.Message(
@@ -911,19 +1209,28 @@ async def on_message(message: cl.Message):
                 )
             ).send()
 
-    raw_query = (message.content or "").strip()
     if not raw_query:
         return
     thread_id, query = _extract_thread_marker(raw_query)
     if thread_id:
         cl.user_session.set("ui_thread_id", thread_id)
     active_ui_thread_id = cl.user_session.get("ui_thread_id")
+    if active_ui_thread_id:
+        pipeline_for_thread = _thread_pipeline_get(active_ui_thread_id)
+        if pipeline_for_thread is not None and pipeline_for_thread is not pipeline:
+            pipeline = pipeline_for_thread
+            cl.user_session.set("pipeline", pipeline)
     open_m = _OPEN_THREAD_CMD_RE.match(query)
     if open_m:
         forced_thread_id = (open_m.group(1) or "").strip()
         if forced_thread_id:
             cl.user_session.set("ui_thread_id", forced_thread_id)
             active_ui_thread_id = forced_thread_id
+        if active_ui_thread_id:
+            pipeline_for_thread = _thread_pipeline_get(active_ui_thread_id)
+            if pipeline_for_thread is not None:
+                pipeline = pipeline_for_thread
+                cl.user_session.set("pipeline", pipeline)
         entries = _THREAD_MEMORY.get((active_ui_thread_id or "").strip(), [])
         if entries:
             for item in entries:
@@ -989,6 +1296,7 @@ async def on_message(message: cl.Message):
     if qlow.startswith("/use "):
         if not pipeline:
             pipeline = _get_pipeline()
+        _thread_pipeline_set(active_ui_thread_id, pipeline)
         name = query[5:].strip()
         ok = pipeline.set_active_document(name)
         if ok:
@@ -1003,6 +1311,7 @@ async def on_message(message: cl.Message):
     # Ensure pipeline exists
     if not pipeline:
         pipeline = _get_pipeline()
+    _thread_pipeline_set(active_ui_thread_id, pipeline)
 
     # Chat mode does not require documents
     mode = cl.user_session.get("mode") or mode

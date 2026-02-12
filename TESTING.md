@@ -155,6 +155,14 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | VLM force regresyon | VLM mode=force acikken Case_Study_20260205.pdf | Headings korunur, chunk sayisi dusmez (18 civari) | PASSED |
 | Zayif text-layer | Text-layer var ama kalitesi dusuk (tek-token satirlar / bozuk layout) | OCR veya VLM daha iyi ise secilir | PASSED (heuristic iyilestirildi) |
 
+### 1.4 CV & Encoding Testleri (Faz 12)
+| Test | Senaryo | Beklenen | Sonuc |
+|------|---------|----------|-------|
+| Encoding Corrupt PDF | `CV-ornek-muhendis.pdf` (bozuk Türkçe karakterler) | `_text_quality_low` character check ile tespit edilir, auto modda OCR/VLM devreye girer | **PASSED** |
+| CV Yapısal Analiz | Numarasız başlıklar ("İŞ DENEYİMİ", "EĞİTİM") | `structure.py` bunları heading olarak tanır, ayrı section yapar | **PASSED** |
+| VLM Force | `vlm_mode="force"` seçili | PDF text layer bozuk olsa bile VLM çıktısı *zorlanarak* kullanılır | **PASSED** (fix sonrası) |
+| Tarih Koruması | "2015 - 2020" gibi satırlar | Başlık sanılmaz (yıl kontrolü) | **PASSED** |
+
 ---
 
 ## 2. Retrieval Testleri
@@ -258,7 +266,10 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | Ayni dosya tekrar yukleme | Aynı PDF/PNG/JPG dosyasini ayni oturumda tekrar yukle | Yeniden indekslemez; sadece aktif dokuman olur (hizli) | PASSED (session-level doc_id + ayar fingerprint skip) |
 | Local (Ollama) mod | `.env`: `LLM_PROVIDER=local`, `VLM_PROVIDER=local`, Ollama calisiyor | Karsilama mesajinda "Local (Offline) Mod" gosterilir; soru sorulabilir, cevap Ollama'dan alinir | PASSED |
 | UI profil secimi | Sol ust profil: Gemini/OpenAI/Local/Extractive | Provider degisir; retrieval/indeksleme ayni kalir | PASSED (smoke) |
+| Runtime ayarlar (ChatSettings) | Embedding/VLM alanlarini UI'dan degistir | Pipeline runtime config guncellenir | PASSED (smoke) |
+| Embedding degisimi etkisi | Embedding model/device degistir | Yuklu chunk'lar icin index rebuild tetiklenir | PASSED (smoke) |
 | Gecmis sohbetler (localStorage) | Soldan bir thread'e tikla | `/open_thread <id>` ile sohbet yeniden oynatilir | PASSED (smoke) |
+| Thread belge senkronu | Gecmis thread'e donup belge sorusu sor | `Aktif Belge` ve `Yuklu Belgeler` dogru gorunur | PASSED (smoke) |
 | Debug paneli | Her cevapta | Debug (intent/citation/coverage) her zaman &lt;details&gt; icinde gosterilir | PASSED |
 | Coklu belge secim | 2+ belge yukle | `/use <dosya>` ile aktif belge secilir | PASSED |
 | Hata durumu | API key eksik | Uyari mesaji | PASSED (UI kodu) |
@@ -266,6 +277,7 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | Bos belge (doc modu) | Belge yuklemeden belge sorusu | "Henuz belge yuklenmedi..." | PASSED (UI kodu) |
 | Dogal dil mod degisimi | "sohbet moduna gec" | Chat moda gecip yanitlar | PASSED (UI kodu) |
 | Dogal dil mod degisimi | "belge moduna nasil donecem" | Doc moda gecip yonlendirir | PASSED (UI kodu) |
+| Scrollbar gizleme | Uzun panel/icerikte scroll olustur | Gorsel scrollbar thumb gorunmez | PASSED (UI/CSS) |
 
 ### 4.1 Dev UX (Windows)
 
@@ -378,11 +390,17 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 
 1. ~~**Keyword overlap halusinasyonu**: "sunucu gereksinimleri" gibi belgede kismi eslesen ama anlam olarak farkli sorgular, deterministik section_list yolunda yanlis sonuc uretebilir.~~ → **COZULDU** (Faz 9): `_topic_heading_relevant()` guard'i eklendi. Sorgunun topic kelimeleri baslik tokenleriyle prefix-tabanli karsilastirilir; uyumsuzlukta deterministik path atlanip LLM'e dusulur.
 
+## 9. Bilinen Sinirlamalar ve Iyilestirme Alanlari
+
+1. ~~**Keyword overlap halusinasyonu**: "sunucu gereksinimleri" gibi belgede kismi eslesen ama anlam olarak farkli sorgular, deterministik section_list yolunda yanlis sonuc uretebilir.~~ → **COZULDU** (Faz 9): `_topic_heading_relevant()` guard'i eklendi. Sorgunun topic kelimeleri baslik tokenleriyle prefix-tabanli karsilastirilir; uyumsuzlukta deterministik path atlanip LLM'e dusulur.
+
 2. **Ingilizce section routing**: Turkce basliklara sahip belgelerde Ingilizce sorgularin section key eslemesi zayiflayabilir (heading_hit 93%, section_hit 83%).
 
 3. **Buyuk belge index suresi**: 30+ sayfali PDF'ler icin indexleme ~60-120s surebilir (VLM mode aciksa daha uzun). Uretim ortaminda index cache'i onerilen.
 
 4. **LLM flakiness**: Case Study eval'de %100 tekrarlanabilirlik icin ilk denemede "not found" donebilir (2. denemede geciyor). Bu, Gemini API'nin non-deterministic dogasindan kaynaklanir.
+
+5. ~~**CV ve Bozuk PDF Desteği**: Numarasız başlıklar ve encoding hataları sistemi bozuyordu.~~ → **ÇÖZÜLDÜ** (Faz 12): VLM force fix, encoding check ve CV keyword başlık desteği eklendi.
 
 ---
 

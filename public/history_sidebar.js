@@ -98,7 +98,7 @@
         left: 0;
         bottom: 0;
         width: 268px;
-        background: #12161f;
+        background: #11161d;
         border-right: 1px solid rgba(255,255,255,0.08);
         z-index: 1400;
         display: flex;
@@ -126,13 +126,15 @@
         border-radius: 10px;
         padding: 10px;
         margin-bottom: 6px;
-        background: #1a2231;
+        background: #1a2029;
         color: #e5e7eb;
         font-size: 13px;
         cursor: pointer;
+        transition: border-color .14s ease, background .14s ease;
       }
       .docqa-history-item.active {
-        border-color: rgba(59,130,246,0.55);
+        border-color: rgba(20,184,166,0.7);
+        background: #202a33;
       }
       .docqa-history-item:hover {
         border-color: rgba(255,255,255,0.22);
