@@ -27,3 +27,21 @@ Thumbs.db
 
 # Local credential manager diagnostics (generated, may include sensitive info)
 gcm-diagnose.log
+
+# Python tooling / packaging
+*.egg-info/
+.eggs/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter (if used)
+.ipynb_checkpoints/
+
+# Env variants (optional local overrides)
+.env.local
+.env.*.local
