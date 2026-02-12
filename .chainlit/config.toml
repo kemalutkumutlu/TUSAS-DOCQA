@@ -1,0 +1,28 @@
+# TUSAS DOCQA — Chainlit UI ayarları
+
+[UI]
+# Arayüz başlığı (Chainlit yerine TUSAS DOCQA)
+name = "TUSAS DOCQA"
+
+# Logo: TUSAS logosu (public/ altında)
+logo_file_url = "/public/logo_brand_white.png"
+default_avatar_file_url = "/public/logo_brand_white.png"
+
+[features]
+unsafe_allow_html = false
+latex = false
+user_message_autoscroll = true
+assistant_message_autoscroll = true
+auto_tag_thread = true
+edit_message = true
+allow_thread_sharing = false
+favorites = false
+
+[features.spontaneous_file_upload]
+enabled = true
+accept = ["application/pdf", "image/png", "image/jpeg"]
+max_files = 10
+max_size_mb = 500
+
+[meta]
+generated_by = "2.9.6"

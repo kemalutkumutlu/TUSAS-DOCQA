@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from google import genai
 from google.genai import types
@@ -650,6 +650,123 @@ def generate_answer(
     )
 
 
+# ── Streaming generation (token callback) ───────────────────────────────────
+
+def generate_answer_stream(
+    retrieval: RetrievalResult,
+    query: str,
+    gemini_api_key: str,
+    gemini_model: str = "gemini-2.0-flash",
+    on_token: Optional[Callable[[str], None]] = None,
+) -> GenerationResult:
+    """
+    Streaming variant of generate_answer() for UI token-by-token rendering.
+
+    Architectural note:
+      - The standard non-streaming generate_answer() remains the source of truth.
+      - This path keeps the same retrieval/context/prompt logic, but intentionally
+        skips post-generation rewrite retries (citation/coverage retry), because
+        once tokens are emitted to the UI they cannot be retracted safely.
+    """
+    def _emit(text: str) -> None:
+        if on_token and text:
+            try:
+                on_token(text)
+            except Exception:
+                pass
+
+    if not retrieval.evidences:
+        answer = "Belgede bu bilgi bulunamadı."
+        _emit(answer)
+        return GenerationResult(
+            answer=answer,
+            citations_found=0,
+            coverage_expected=None,
+            coverage_actual=None,
+            coverage_ok=None,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    deterministic = _render_deterministic_section_list(retrieval)
+    if deterministic:
+        _emit(deterministic)
+        citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", deterministic)) + len(
+            re.findall(r"\[[^\]]*?/\s*\d+\s*\]", deterministic)
+        )
+        expected = retrieval.coverage.expected_items if retrieval.coverage else None
+        actual = _count_answer_items(deterministic) if expected is not None else None
+        ok = (actual >= expected) if (expected is not None and actual is not None) else None
+        return GenerationResult(
+            answer=deterministic,
+            citations_found=citations_found,
+            coverage_expected=expected,
+            coverage_actual=actual,
+            coverage_ok=ok,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    context = _build_context(retrieval.evidences)
+    system = _SYSTEM_PROMPT_BASE + _language_addendum(query)
+    coverage_expected: Optional[int] = None
+    if retrieval.intent == "section_list" and retrieval.coverage:
+        coverage_expected = retrieval.coverage.expected_items
+        system += _SECTION_LIST_ADDENDUM.format(expected=coverage_expected)
+
+    user_message = (
+        f"BAĞLAM:\n{context}\n\n"
+        f"---\n\n"
+        f"SORU: {query}"
+    )
+
+    client = genai.Client(api_key=gemini_api_key)
+    chunks: list[str] = []
+    for event in client.models.generate_content_stream(
+        model=gemini_model,
+        contents=user_message,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=0.1,
+            max_output_tokens=4096,
+        ),
+    ):
+        token = (event.text or "")
+        if token:
+            chunks.append(token)
+            _emit(token)
+
+    answer = "".join(chunks).strip() or "Belgede bu bilgi bulunamadı."
+
+    citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+        re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+    )
+
+    coverage_actual: Optional[int] = None
+    coverage_ok: Optional[bool] = None
+    if coverage_expected is not None:
+        coverage_actual = _count_answer_items(answer)
+        coverage_ok = coverage_actual >= coverage_expected
+        if coverage_ok is False:
+            warning = (
+                f"\n\n⚠️ **Kapsam Uyarısı**: Bağlamda bu bölümde {coverage_expected} "
+                f"madde tespit edildi, ancak cevapta {coverage_actual} madde var. "
+                f"Lütfen cevabı kontrol edin."
+            )
+            answer += warning
+            _emit(warning)
+
+    return GenerationResult(
+        answer=answer,
+        citations_found=citations_found,
+        coverage_expected=coverage_expected,
+        coverage_actual=coverage_actual,
+        coverage_ok=coverage_ok,
+        intent=retrieval.intent,
+        context_preview=context[:500],
+    )
+
+
 # ── Local LLM generation (Ollama) ──────────────────────────────────────────
 
 def generate_chat_answer_local(
@@ -783,6 +900,110 @@ def generate_answer_local(
                 f"madde tespit edildi, ancak cevapta {coverage_actual} madde var. "
                 f"Lütfen cevabı kontrol edin."
             )
+
+    return GenerationResult(
+        answer=answer,
+        citations_found=citations_found,
+        coverage_expected=coverage_expected,
+        coverage_actual=coverage_actual,
+        coverage_ok=coverage_ok,
+        intent=retrieval.intent,
+        context_preview=context[:500],
+    )
+
+
+def generate_answer_local_stream(
+    retrieval: RetrievalResult,
+    query: str,
+    ollama_cfg: "OllamaConfig",
+    on_token: Optional[Callable[[str], None]] = None,
+) -> GenerationResult:
+    """
+    Streaming variant of generate_answer_local() for UI token-by-token rendering.
+
+    Keeps the same retrieval/context/prompt logic, but skips post-generation
+    rewrite retries for the same reason as generate_answer_stream().
+    """
+    from .local_llm import OllamaConfig, ollama_chat_stream  # noqa: F811
+
+    def _emit(text: str) -> None:
+        if on_token and text:
+            try:
+                on_token(text)
+            except Exception:
+                pass
+
+    if not retrieval.evidences:
+        answer = "Belgede bu bilgi bulunamadı."
+        _emit(answer)
+        return GenerationResult(
+            answer=answer,
+            citations_found=0,
+            coverage_expected=None,
+            coverage_actual=None,
+            coverage_ok=None,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    deterministic = _render_deterministic_section_list(retrieval)
+    if deterministic:
+        _emit(deterministic)
+        citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", deterministic)) + len(
+            re.findall(r"\[[^\]]*?/\s*\d+\s*\]", deterministic)
+        )
+        expected = retrieval.coverage.expected_items if retrieval.coverage else None
+        actual = _count_answer_items(deterministic) if expected is not None else None
+        ok = (actual >= expected) if (expected is not None and actual is not None) else None
+        return GenerationResult(
+            answer=deterministic,
+            citations_found=citations_found,
+            coverage_expected=expected,
+            coverage_actual=actual,
+            coverage_ok=ok,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    context = _build_context(retrieval.evidences)
+    system = _SYSTEM_PROMPT_BASE + _language_addendum(query)
+    coverage_expected: Optional[int] = None
+    if retrieval.intent == "section_list" and retrieval.coverage:
+        coverage_expected = retrieval.coverage.expected_items
+        system += _SECTION_LIST_ADDENDUM.format(expected=coverage_expected)
+
+    user_message = (
+        f"BAĞLAM:\n{context}\n\n"
+        f"---\n\n"
+        f"SORU: {query}"
+    )
+
+    answer = ollama_chat_stream(
+        cfg=ollama_cfg,
+        system=system,
+        user_message=user_message,
+        temperature=0.1,
+        max_tokens=4096,
+        on_token=_emit,
+    ) or "Belgede bu bilgi bulunamadı."
+
+    citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+        re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+    )
+
+    coverage_actual: Optional[int] = None
+    coverage_ok: Optional[bool] = None
+    if coverage_expected is not None:
+        coverage_actual = _count_answer_items(answer)
+        coverage_ok = coverage_actual >= coverage_expected
+        if coverage_ok is False:
+            warning = (
+                f"\n\n⚠️ **Kapsam Uyarısı**: Bağlamda bu bölümde {coverage_expected} "
+                f"madde tespit edildi, ancak cevapta {coverage_actual} madde var. "
+                f"Lütfen cevabı kontrol edin."
+            )
+            answer += warning
+            _emit(warning)
 
     return GenerationResult(
         answer=answer,

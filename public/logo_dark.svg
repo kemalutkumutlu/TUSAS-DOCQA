@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 90">
+  <style>
+    /* Font style matching 'TURKISH AEROSPACE' logo */
+    .t1 { font-family: 'Arial', sans-serif; font-weight: 900; font-size: 34px; fill: #f3f4f6; letter-spacing: 0px; }
+    .t2 { font-family: 'Arial', sans-serif; font-weight: 900; font-size: 34px; fill: #d1d5db; letter-spacing: 0px; font-style: italic;}
+    .blue { fill: #3b82f6; } /* Lighter blue */
+    .red { fill: #ef4444; }   /* Lighter red */
+  </style>
+  
+  <!-- Text Block (Left) -->
+  <text x="10" y="40" class="t1">TURKISH</text>
+  <text x="10" y="75" class="t2">AEROSPACE</text>
+  
+  <!-- Emblem (Right) -->
+  <!-- Blue Wing (Top) -->
+  <path d="M260 25 L360 10 L310 45 Z" class="blue" /> 
+  <!-- Red Wing (Bottom) -->
+  <path d="M315 45 L335 45 L315 90 Z" class="red" />
+</svg>

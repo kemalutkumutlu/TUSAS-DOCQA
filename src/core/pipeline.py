@@ -13,13 +13,15 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from uuid import uuid4
 
 from .generation import (
     GenerationResult,
     generate_answer,
+    generate_answer_stream,
     generate_answer_local,
+    generate_answer_local_stream,
     generate_chat_answer,
     generate_chat_answer_local,
     generate_extractive_answer,
@@ -83,11 +85,27 @@ class RAGPipeline:
     def session_id(self) -> str:
         return self._session_id
 
-    def add_document(self, file_path: Path, display_name: Optional[str] = None) -> DocumentState:
+    def add_document(
+        self,
+        file_path: Path,
+        display_name: Optional[str] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> DocumentState:
         """
         Ingest a document, build structure, create chunks, and rebuild index.
         Returns the document state.
         """
+        def _progress(step: str) -> None:
+            if not progress_callback:
+                return
+            try:
+                progress_callback(step)
+            except Exception:
+                # Progress is best-effort and should never break ingestion/indexing.
+                pass
+
+        _progress("Belge kimligi kontrol ediliyor...")
+
         # If the file bytes are identical AND ingestion/index settings are identical,
         # skip re-processing entirely to avoid redundant OCR/VLM + embedding work.
         #
@@ -128,15 +146,19 @@ class RAGPipeline:
         if existing and (existing.build_fingerprint == fp):
             # Treat this upload as a "select active document" action.
             self._active_doc_id = doc_id
+            _progress("Ayni belge bulundu, yeniden isleme atlandi.")
             return existing
 
+        _progress("Metin cikarma basladi (PDF/OCR/VLM)...")
         ingest = ingest_any(
             file_path,
             ocr=self.ocr_config,
             display_name=display_name,
             vlm=self.vlm_config,
         )
+        _progress("Belge yapisi analiz ediliyor...")
         root = build_section_tree(ingest)
+        _progress("Chunk'lar olusturuluyor...")
         chunks = section_tree_to_chunks(ingest, root)
 
         state = DocumentState(
@@ -162,6 +184,7 @@ class RAGPipeline:
                 "Bu belgeden metin/bolum cikarilamadi (bos veya OCR gerektiriyor olabilir)."
             ]
             self._index = None
+            _progress("Belgeden indekslenebilir metin cikmadi.")
             lg = self._get_logger()
             if lg:
                 lg.log(
@@ -181,8 +204,10 @@ class RAGPipeline:
         # chunks, add only the new doc's chunks (avoid re-embedding all previous).
         _t0 = time.perf_counter()
         if self._index is not None and chunks:
+            _progress("Mevcut indekse yeni chunk'lar ekleniyor...")
             self._index.add_chunks(chunks)
         else:
+            _progress("Vektor ve BM25 indeksleri olusturuluyor...")
             self._index = LocalIndex.build(
                 chunks=self._all_chunks,
                 chroma_dir=self.chroma_dir,
@@ -190,6 +215,7 @@ class RAGPipeline:
                 embedding_device=self.embedding_device,
             )
         _index_ms = (time.perf_counter() - _t0) * 1000
+        _progress("Belge isleme tamamlandi.")
 
         lg = self._get_logger()
         if lg:
@@ -457,6 +483,98 @@ class RAGPipeline:
             )
 
         return result
+
+    def ask_stream(
+        self,
+        query: str,
+        on_token: Optional[Callable[[str], None]] = None,
+    ) -> GenerationResult:
+        """
+        Streaming answer path for UI token rendering.
+
+        Keeps retrieval/index architecture unchanged and coexists with ask().
+        """
+        if self._index is None:
+            empty = RetrievalResult(intent=classify_query(query), evidences=[], section_complete=False, coverage=None)
+            if self.llm_provider == "none":
+                result = generate_extractive_answer(retrieval=empty, query=query)
+                if on_token and result.answer:
+                    on_token(result.answer)
+            elif self.llm_provider == "local" and self.ollama_config:
+                result = generate_answer_local_stream(
+                    retrieval=empty,
+                    query=query,
+                    ollama_cfg=self.ollama_config,
+                    on_token=on_token,
+                )
+            else:
+                result = generate_answer_stream(
+                    retrieval=empty,
+                    query=query,
+                    gemini_api_key=self.gemini_api_key,
+                    gemini_model=self.gemini_model,
+                    on_token=on_token,
+                )
+            return result
+
+        _t_ret = time.perf_counter()
+        doc_hint = self._resolve_doc_id_hint(query)
+        ret = retrieve(self._index, query, doc_id=doc_hint)
+        _retrieval_ms = (time.perf_counter() - _t_ret) * 1000
+
+        _t_gen = time.perf_counter()
+        if self.llm_provider == "none":
+            result = generate_extractive_answer(retrieval=ret, query=query)
+            if on_token and result.answer:
+                on_token(result.answer)
+        elif self.llm_provider == "local" and self.ollama_config:
+            result = generate_answer_local_stream(
+                retrieval=ret,
+                query=query,
+                ollama_cfg=self.ollama_config,
+                on_token=on_token,
+            )
+        else:
+            result = generate_answer_stream(
+                retrieval=ret,
+                query=query,
+                gemini_api_key=self.gemini_api_key,
+                gemini_model=self.gemini_model,
+                on_token=on_token,
+            )
+        _gen_ms = (time.perf_counter() - _t_gen) * 1000
+
+        lg = self._get_logger()
+        if lg:
+            lg.log(
+                session_id=self._session_id,
+                event="qa_stream",
+                payload={
+                    "query": query,
+                    "intent": ret.intent,
+                    "active_doc_name": self.active_document_name,
+                    "active_doc_id": doc_hint,
+                    "documents": self.list_documents(),
+                    "doc_count": self.document_count,
+                    "evidence_count": len(ret.evidences),
+                    "section_complete": bool(ret.section_complete),
+                    "coverage_expected": ret.coverage.expected_items if ret.coverage else None,
+                    "coverage_actual": result.coverage_actual,
+                    "coverage_ok": result.coverage_ok,
+                    "citations_found": result.citations_found,
+                    "answer_len": len(result.answer or ""),
+                    "retrieval_ms": round(_retrieval_ms, 1),
+                    "generation_ms": round(_gen_ms, 1),
+                    **(
+                        {"context_preview": result.context_preview}
+                        if (lg.include_context_preview and result.context_preview)
+                        else {}
+                    ),
+                },
+            )
+
+        return result
+
     def chat(self, query: str, chat_style: str = "neutral") -> str:
         """
         Chat-only mode (no retrieval).

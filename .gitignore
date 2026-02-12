@@ -21,6 +21,7 @@ Thumbs.db
 
 # Chainlit local runtime/config cache (generated)
 .chainlit/
+!.chainlit/config.toml
 
 # Chainlit uploaded assets (generated)
 .files/
