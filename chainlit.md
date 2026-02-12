@@ -29,6 +29,25 @@ PDF ve gorsel (JPG, PNG) belgelerinizi yukleyin, ardindan Turkce veya Ingilizce 
 - Ayni dosyayi (icerik ayni) **ayni oturumda** tekrar yuklerseniz sistem yeniden indekslemez; sadece o dokumani aktif hale getirir (hizli).
 - (Opsiyonel) Loglama: Soru/cevaplari JSONL olarak kaydetmek icin `.env` icinde `RAG_LOG=1` yapabilirsiniz (detay: `README.md`).
 
+## LLM Secimi (UI)
+
+Sol ustteki profil secicisinden, bu oturum icin LLM saglayicisini degistirebilirsiniz:
+
+- `Gemini`: `GEMINI_API_KEY` gerekir.
+- `OpenAI`: `OPENAI_API_KEY` gerekir.
+- `Local`: Ollama uzerinden offline (`LLM_PROVIDER=local`) calisir.
+- `Extractive`: LLM kullanmaz (`LLM_PROVIDER=none`).
+
+Bu secim RAG akisini degistirmez; retrieval/indeksleme ayni kalir, sadece generation provider degisir.
+
+## Gecmis Sohbetler (UI)
+
+Desktop genislikte sol tarafta mini **Gecmis Sohbetler** paneli gorunur. Bu panel:
+
+- Thread basliklarini tarayici `localStorage` icinde tutar.
+- Bir thread'e tiklayinca `/open_thread <id>` ile sohbeti yeniden oynatir.
+- Sunucu tarafinda DB/persistence yapmaz (sayfa/cihaz degisince paylasim garanti degildir).
+
 ## Local (Offline) Mod
 
 Tum sistem internet baglantisi olmadan calisabilir. `.env` icinde:

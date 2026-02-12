@@ -120,7 +120,7 @@ Notlar:
 
 ### (Opsiyonel) GPU Notu (Embedding Hizlandirma)
 
-Bu projede GPU, **sadece embedding** (SentenceTransformers) tarafinda etkilidir. Gemini LLM/VLM API oldugu icin GPU ile hizlanmaz.
+Bu projede GPU, **sadece embedding** (SentenceTransformers) tarafinda etkilidir. Gemini/OpenAI LLM API (ve Gemini VLM API) uzak servis oldugu icin GPU ile hizlanmaz.
 
 - Varsayilan davranis:
   - CUDA varsa embedding otomatik **GPU**'da calisir
@@ -312,7 +312,7 @@ ilk yukleme suresi yuksek olabilir.
   - Chunk embedding (ilk calistirmada model indirme + embedding hesaplama)
 - **GPU beklentisi**
   - GPU bu projede sadece embedding tarafini hizlandirir.
-  - Gemini LLM/VLM API cagrilari uzak servis oldugu icin GPU ile hizlanmaz.
+  - Gemini/OpenAI LLM API (ve Gemini VLM API) uzak servis oldugu icin GPU ile hizlanmaz.
 
 #### Bu projede kalite icin verilen tradeoff'lar
 
@@ -355,7 +355,12 @@ Tarayicida `http://localhost:8000` adresini acin.
 
 ### UI (Chainlit)
 
-- Varsayilan Chainlit arayuzu kullanilir. Dil ve sidebar ayarlari `.chainlit/config.toml` ile degistirilebilir.
+- UI Chainlit tabanlidir ve `.chainlit/config.toml` ile ozellestirilir (tema/logo/custom JS).
+- Sol tarafta (desktop genislikte) tarayici `localStorage` icinde tutulan mini **Gecmis Sohbetler** paneli vardir (`public/history_sidebar.js`).
+  - Bu panel sadece arayuz kolayligidir; sunucu tarafinda DB/persistence yapmaz.
+  - Bir sohbeti tiklayinca istemci, Chainlit'e `/open_thread <id>` komutunu gondererek o thread'in hafizadan yeniden oynatilmasini ister.
+- Sol ustteki profil secicisinden LLM profili degistirilebilir: `Gemini` / `OpenAI` / `Local (Ollama)` / `Extractive (LLM yok)`.
+  - Profil secimi RAG mimarisini degistirmez; sadece `llm_provider` secimini degistirir (retrieval/indeksleme ayni kalir).
 
 ### Mod Davranisi (Kisa)
 
@@ -445,6 +450,9 @@ Loglar JSONL formatinda yazilir:
 
 ### Troubleshooting (Windows)
 
+- **Chainlit "config.toml outdated" hatasi**:
+  - Hata ornegi: `ValueError: ... .chainlit/config.toml is outdated`
+  - Cozum: `.chainlit/config.toml` dosyasini silin ve `python -m chainlit run app.py` ile yeniden baslatin (Chainlit dosyayi yeniden uretir). Sonra gerekiyorsa UI ozellestirmelerini tekrar uygulayin.
 - **Port 8000 zaten kullanimda / tab kapandi ama process durmadi**:
   - Hızlı cozum: farkli portla baslatin:
 
@@ -476,6 +484,7 @@ Loglar JSONL formatinda yazilir:
 ├── GPU_REQUIREMENTS.md         # (Opsiyonel) GPU kurulum ve dogrulama
 ├── DEVLOG.md                   # Gelistirme sureci kaydi
 ├── TESTING.md                  # Test senaryolari ve sonuclari
+├── public/                     # UI tema/logo/custom JS (Chainlit static)
 ├── src/
 │   ├── config.py               # Ortam degiskenleri yukleyici
 │   └── core/
@@ -541,7 +550,7 @@ Loglar JSONL formatinda yazilir:
 
 - Vector store olarak **ChromaDB** kullanilmaktadir (MVP icin en hizli kurulum).
 - Sparse index: **BM25** (rank-bm25), her build/extend sonrasi `data/chroma/bm25_index.pkl` olarak diske kaydedilir.
-- Embedding modeli: `intfloat/multilingual-e5-small` (TR/EN multilingual, hafif).
+- Embedding modeli (varsayilan): `EMBEDDING_MODEL=auto` ile CUDA varsa `intfloat/multilingual-e5-base`, yoksa `intfloat/multilingual-e5-small`.
 - LLM: **Gemini 2.0 Flash** (varsayilan, `.env`'den degistirilebilir). Gemini secimi ayrica pratik bir sebeple yapilmistir: Google AI Studio **300$ free credit** verdigi icin kullanilmistir.
 - `LLM_PROVIDER=none` ile LLM olmadan extractive QA modunda calisir.
 - CI: `.github/workflows/ci.yml` her push'ta `baseline_gate` + `lang_gate` calistirir.
@@ -551,5 +560,7 @@ Loglar JSONL formatinda yazilir:
 | Ozellik | Durum | Aciklama |
 |---------|-------|----------|
 | **Reranker (Cross-Encoder)** | Planli | Hybrid top-k sonrasi cross-encoder ile yeniden siralama. Benzer baslikli bolumlerde "yakin ama yanlis" eslesmesini azaltir. Trade-off: +200-500ms latency, ~400MB ek model. Degerlendirme asamasinda. |
-| **Local LLM Provider** | Planli | `LLM_PROVIDER=local` ile llama.cpp/vLLM uzerinden tam offline QA. Mimari hazir (`llm_provider` field mevcut), model entegrasyonu bekliyor. |
+| **Local (Ollama) LLM/VLM Provider** | Tamam | `LLM_PROVIDER=local` / `VLM_PROVIDER=local` ile tam offline calisma (Ollama). |
+| **OpenAI Provider** | Tamam | `LLM_PROVIDER=openai` ile OpenAI API uzerinden generation (UI profil secicisi de destekler). |
+| **Server-side sohbet gecmisi** | Gelecek | UI'daki localStorage gecmisi yerine (opsiyonel) sunucu tarafinda thread persistence. |
 | **PII Redaction / Audit** | Gelecek | Savunma sanayii senaryolari icin PII maskeleme, kullanici bazli erisim kontrolu ve audit trail. |

@@ -19,10 +19,13 @@ from uuid import uuid4
 from .generation import (
     GenerationResult,
     generate_answer,
+    generate_answer_openai,
     generate_answer_stream,
+    generate_answer_openai_stream,
     generate_answer_local,
     generate_answer_local_stream,
     generate_chat_answer,
+    generate_chat_answer_openai,
     generate_chat_answer_local,
     generate_extractive_answer,
 )
@@ -63,6 +66,8 @@ class RAGPipeline:
     vlm_config: Optional[VLMConfig] = None
     llm_provider: str = "gemini"  # "gemini" | "openai" | "local" | "none"
     ollama_config: Optional[OllamaConfig] = None
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
 
     # State
     _documents: Dict[str, DocumentState] = field(default_factory=dict)
@@ -390,6 +395,13 @@ class RAGPipeline:
             empty = RetrievalResult(intent=classify_query(query), evidences=[], section_complete=False, coverage=None)
             if self.llm_provider == "none":
                 result = generate_extractive_answer(retrieval=empty, query=query)
+            elif self.llm_provider == "openai":
+                result = generate_answer_openai(
+                    retrieval=empty,
+                    query=query,
+                    openai_api_key=self.openai_api_key,
+                    openai_model=self.openai_model,
+                )
             elif self.llm_provider == "local" and self.ollama_config:
                 result = generate_answer_local(
                     retrieval=empty,
@@ -439,6 +451,13 @@ class RAGPipeline:
         _t_gen = time.perf_counter()
         if self.llm_provider == "none":
             result = generate_extractive_answer(retrieval=ret, query=query)
+        elif self.llm_provider == "openai":
+            result = generate_answer_openai(
+                retrieval=ret,
+                query=query,
+                openai_api_key=self.openai_api_key,
+                openai_model=self.openai_model,
+            )
         elif self.llm_provider == "local" and self.ollama_config:
             result = generate_answer_local(
                 retrieval=ret,
@@ -500,6 +519,14 @@ class RAGPipeline:
                 result = generate_extractive_answer(retrieval=empty, query=query)
                 if on_token and result.answer:
                     on_token(result.answer)
+            elif self.llm_provider == "openai":
+                result = generate_answer_openai_stream(
+                    retrieval=empty,
+                    query=query,
+                    openai_api_key=self.openai_api_key,
+                    openai_model=self.openai_model,
+                    on_token=on_token,
+                )
             elif self.llm_provider == "local" and self.ollama_config:
                 result = generate_answer_local_stream(
                     retrieval=empty,
@@ -527,6 +554,14 @@ class RAGPipeline:
             result = generate_extractive_answer(retrieval=ret, query=query)
             if on_token and result.answer:
                 on_token(result.answer)
+        elif self.llm_provider == "openai":
+            result = generate_answer_openai_stream(
+                retrieval=ret,
+                query=query,
+                openai_api_key=self.openai_api_key,
+                openai_model=self.openai_model,
+                on_token=on_token,
+            )
         elif self.llm_provider == "local" and self.ollama_config:
             result = generate_answer_local_stream(
                 retrieval=ret,
@@ -579,6 +614,18 @@ class RAGPipeline:
         """
         Chat-only mode (no retrieval).
         """
+        if self.llm_provider == "none":
+            return (
+                "Sohbet modu devre disi (LLM provider: none). "
+                "LLM secimi yapip tekrar deneyebilirsin."
+            )
+        if self.llm_provider == "openai":
+            return generate_chat_answer_openai(
+                query=query,
+                openai_api_key=self.openai_api_key,
+                openai_model=self.openai_model,
+                chat_style=chat_style,
+            )
         if self.llm_provider == "local" and self.ollama_config:
             return generate_chat_answer_local(
                 query=query,

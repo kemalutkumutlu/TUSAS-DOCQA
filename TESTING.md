@@ -257,6 +257,8 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | Coklu dosya | 2+ dosya yukleme | Hepsi indekslenir | PASSED (UI kodu) |
 | Ayni dosya tekrar yukleme | Aynı PDF/PNG/JPG dosyasini ayni oturumda tekrar yukle | Yeniden indekslemez; sadece aktif dokuman olur (hizli) | PASSED (session-level doc_id + ayar fingerprint skip) |
 | Local (Ollama) mod | `.env`: `LLM_PROVIDER=local`, `VLM_PROVIDER=local`, Ollama calisiyor | Karsilama mesajinda "Local (Offline) Mod" gosterilir; soru sorulabilir, cevap Ollama'dan alinir | PASSED |
+| UI profil secimi | Sol ust profil: Gemini/OpenAI/Local/Extractive | Provider degisir; retrieval/indeksleme ayni kalir | PASSED (smoke) |
+| Gecmis sohbetler (localStorage) | Soldan bir thread'e tikla | `/open_thread <id>` ile sohbet yeniden oynatilir | PASSED (smoke) |
 | Debug paneli | Her cevapta | Debug (intent/citation/coverage) her zaman &lt;details&gt; icinde gosterilir | PASSED |
 | Coklu belge secim | 2+ belge yukle | `/use <dosya>` ile aktif belge secilir | PASSED |
 | Hata durumu | API key eksik | Uyari mesaji | PASSED (UI kodu) |

@@ -1,7 +1,7 @@
 # GPU_REQUIREMENTS
 
 Bu proje GPU'yu Python tarafinda **yalnizca embedding** (SentenceTransformers / PyTorch) icin kullanir.
-Gemini LLM/VLM API cagirilari uzak servis oldugu icin GPU ile hizlanmaz.
+Gemini/OpenAI LLM API cagirilari uzak servis oldugu icin GPU ile hizlanmaz.
 
 > Not (Local mod): `LLM_PROVIDER=local` / `VLM_PROVIDER=local` iken Ollama kendi surecinde GPU kullanir.
 > Bu durumda VRAM kapasitesi local LLM/VLM performansi icin kritik hale gelir.

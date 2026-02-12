@@ -30,6 +30,10 @@ from src.core.vlm_extract import VLMConfig
 _ACTIVE_CHAT_SESSIONS = 0
 _EXIT_TASK: asyncio.Task | None = None
 _EXIT_LOCK = asyncio.Lock()
+_THREAD_TAG_RE = re.compile(r"^<!--THREAD:([A-Za-z0-9:_\-.]+)-->\s*")
+_OPEN_THREAD_CMD_RE = re.compile(r"^/open_thread(?:\s+([A-Za-z0-9:_\-.]+))?\s*$", re.IGNORECASE)
+_THREAD_MEMORY: dict[str, list[dict[str, str]]] = {}
+_THREAD_MEMORY_MAX_MSGS = 120
 
 
 def _auto_exit_enabled() -> bool:
@@ -44,6 +48,30 @@ def _auto_exit_grace_seconds() -> float:
     except Exception:
         sec = 8.0
     return max(0.0, min(120.0, sec))
+
+
+def _extract_thread_marker(text: str) -> tuple[str | None, str]:
+    raw = (text or "").strip()
+    m = _THREAD_TAG_RE.match(raw)
+    if not m:
+        return None, raw
+    thread_id = (m.group(1) or "").strip()
+    rest = raw[m.end():].strip()
+    return (thread_id or None), rest
+
+
+def _thread_memory_add(thread_id: str | None, role: str, content: str) -> None:
+    tid = (thread_id or "").strip()
+    msg = re.sub(r"\s+", " ", (content or "").strip())
+    if not tid or not msg or role not in ("user", "assistant"):
+        return
+    buf = _THREAD_MEMORY.get(tid, [])
+    if buf and buf[-1].get("role") == role and buf[-1].get("content") == msg:
+        return
+    buf.append({"role": role, "content": msg})
+    if len(buf) > _THREAD_MEMORY_MAX_MSGS:
+        buf = buf[-_THREAD_MEMORY_MAX_MSGS:]
+    _THREAD_MEMORY[tid] = buf
 
 
 async def _cancel_exit_task() -> None:
@@ -142,6 +170,109 @@ _DOC_MODE_REQUEST_PATTERNS = [
     # English
     r"\bdoc\s+mode\b|\bdocument\s+mode\b",
 ]
+
+_CHAT_PROFILE_TO_PROVIDER = {
+    "Gemini": "gemini",
+    "OpenAI": "openai",
+    "Local": "local",
+    "Extractive": "none",
+}
+_CHAT_HISTORY_KEY = "recent_user_messages"
+_CHAT_HISTORY_MAX = 12
+
+
+def _get_cached_settings():
+    settings = cl.user_session.get("app_settings")
+    if settings is None:
+        settings = load_settings()
+        cl.user_session.set("app_settings", settings)
+    return settings
+
+
+def _default_profile_name() -> str:
+    settings = load_settings()
+    provider = (settings.llm_provider or "gemini").strip().lower()
+    for profile_name, profile_provider in _CHAT_PROFILE_TO_PROVIDER.items():
+        if profile_provider == provider:
+            return profile_name
+    return "Gemini"
+
+
+def _active_llm_model(pipeline: RAGPipeline | None) -> str:
+    if pipeline is None:
+        return "-"
+    provider = (pipeline.llm_provider or "gemini").strip().lower()
+    if provider == "openai":
+        return (pipeline.openai_model or "").strip() or "-"
+    if provider == "local":
+        if pipeline.ollama_config:
+            return (pipeline.ollama_config.llm_model or "").strip() or "-"
+        return "-"
+    if provider == "none":
+        return "extractive"
+    return (pipeline.gemini_model or "").strip() or "-"
+
+
+def _apply_chat_profile_to_pipeline(pipeline: RAGPipeline) -> str | None:
+    """
+    Apply selected Chainlit chat profile to runtime LLM provider/model.
+    Returns an optional user-facing warning.
+    """
+    settings = _get_cached_settings()
+    profile_name = (cl.user_session.get("chat_profile") or "").strip()
+    provider = _CHAT_PROFILE_TO_PROVIDER.get(profile_name)
+    if not provider:
+        return None
+
+    # Keep provider-specific models synced with env defaults.
+    pipeline.gemini_model = settings.gemini_model
+    pipeline.openai_model = settings.openai_model
+    pipeline.ollama_config = OllamaConfig(
+        base_url=settings.ollama_base_url,
+        llm_model=settings.ollama_llm_model,
+        vlm_model=settings.ollama_vlm_model,
+        timeout=settings.ollama_timeout,
+    )
+
+    if provider == "openai" and not settings.openai_api_key.strip():
+        return (
+            "Secilen profil `OpenAI` ancak `OPENAI_API_KEY` tanimli degil. "
+            f"Mevcut provider korunuyor: `{pipeline.llm_provider}`."
+        )
+    if provider == "gemini" and not settings.gemini_api_key.strip():
+        return (
+            "Secilen profil `Gemini` ancak `GEMINI_API_KEY` tanimli degil. "
+            f"Mevcut provider korunuyor: `{pipeline.llm_provider}`."
+        )
+
+    pipeline.llm_provider = provider
+    return None
+
+
+def _shorten_for_sidebar(text: str, limit: int = 84) -> str:
+    clean = re.sub(r"\s+", " ", (text or "").strip())
+    if len(clean) <= limit:
+        return clean
+    return clean[: max(0, limit - 3)] + "..."
+
+
+def _get_chat_history() -> list[str]:
+    raw = cl.user_session.get(_CHAT_HISTORY_KEY)
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if isinstance(item, str)]
+
+
+def _append_chat_history_user_message(message: str) -> None:
+    text = _shorten_for_sidebar(message)
+    if not text:
+        return
+    items = _get_chat_history()
+    if not items or items[-1] != text:
+        items.append(text)
+    if len(items) > _CHAT_HISTORY_MAX:
+        items = items[-_CHAT_HISTORY_MAX:]
+    cl.user_session.set(_CHAT_HISTORY_KEY, items)
 
 
 def _looks_like_doc_mode_request(query: str) -> bool:
@@ -243,7 +374,7 @@ def _get_pipeline() -> RAGPipeline:
     """Get or lazily create the pipeline stored in the user session."""
     pipeline: RAGPipeline | None = cl.user_session.get("pipeline")
     if pipeline is None:
-        settings = load_settings()
+        settings = _get_cached_settings()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         settings.chroma_dir.mkdir(parents=True, exist_ok=True)
 
@@ -281,7 +412,9 @@ def _get_pipeline() -> RAGPipeline:
                 ollama_timeout=settings.ollama_timeout,
             ),
             llm_provider=settings.llm_provider,
-            ollama_config=ollama_cfg if settings.llm_provider == "local" else None,
+            ollama_config=ollama_cfg,
+            openai_api_key=settings.openai_api_key,
+            openai_model=settings.openai_model,
         )
         cl.user_session.set("pipeline", pipeline)
     return pipeline
@@ -312,9 +445,44 @@ async def _process_uploaded_file(file_path: str, file_name: str) -> str:
 
 # ── Lifecycle hooks ──────────────────────────────────────────────────────────
 
+
+@cl.set_chat_profiles
+async def set_chat_profiles(_current_user, _language):
+    default_profile = _default_profile_name()
+    return [
+        cl.ChatProfile(
+            name="Gemini",
+            display_name="Gemini",
+            markdown_description="Google Gemini (RAG + chat).",
+            default=(default_profile == "Gemini"),
+        ),
+        cl.ChatProfile(
+            name="OpenAI",
+            display_name="OpenAI",
+            markdown_description="OpenAI modeli ile RAG + chat.",
+            default=(default_profile == "OpenAI"),
+        ),
+        cl.ChatProfile(
+            name="Local",
+            display_name="Local",
+            markdown_description="Ollama local model (RAG + chat).",
+            default=(default_profile == "Local"),
+        ),
+        cl.ChatProfile(
+            name="Extractive",
+            display_name="Extractive",
+            markdown_description="LLM yok, sadece extractive cevap.",
+            default=(default_profile == "Extractive"),
+        ),
+    ]
+
+
 @cl.on_chat_start
 async def on_chat_start():
     cl.user_session.set("mode", "doc")
+    cl.user_session.set(_CHAT_HISTORY_KEY, [])
+    pipeline = _get_pipeline()
+    profile_warning = _apply_chat_profile_to_pipeline(pipeline)
 
     # Track active sessions for optional auto-exit behavior.
     async with _EXIT_LOCK:
@@ -328,7 +496,9 @@ async def on_chat_start():
             )
 
     # Intentionally no auto welcome message to avoid initial layout jump in UI.
-    await _update_documents_sidebar()
+    if profile_warning:
+        await cl.Message(content=profile_warning).send()
+    await _update_documents_sidebar(pipeline)
 
 
 @cl.on_chat_end
@@ -404,9 +574,12 @@ async def _update_documents_sidebar(pipeline: RAGPipeline | None = None) -> None
         mode = cl.user_session.get("mode") or "doc"
         docs = pipeline.list_documents() if pipeline else []
         active = pipeline.active_document_name if pipeline else None
+        llm_provider = (pipeline.llm_provider if pipeline else "gemini") or "gemini"
+        llm_model = _active_llm_model(pipeline)
 
         lines = [
             f"**Mod**: `{mode}`",
+            f"**LLM**: `{llm_provider}` | `{llm_model}`",
             f"**Aktif Belge**: `{active}`" if active else "**Aktif Belge**: `(yok)`",
             "",
             "**Yuklu Belgeler**",
@@ -427,7 +600,6 @@ async def _update_documents_sidebar(pipeline: RAGPipeline | None = None) -> None
                 "- Sohbet modu: `/chat`",
             ]
         )
-
         await cl.ElementSidebar.set_title("Belge Durumu")
         await cl.ElementSidebar.set_elements(
             [
@@ -739,7 +911,29 @@ async def on_message(message: cl.Message):
                 )
             ).send()
 
-    query = message.content.strip()
+    raw_query = (message.content or "").strip()
+    if not raw_query:
+        return
+    thread_id, query = _extract_thread_marker(raw_query)
+    if thread_id:
+        cl.user_session.set("ui_thread_id", thread_id)
+    active_ui_thread_id = cl.user_session.get("ui_thread_id")
+    open_m = _OPEN_THREAD_CMD_RE.match(query)
+    if open_m:
+        forced_thread_id = (open_m.group(1) or "").strip()
+        if forced_thread_id:
+            cl.user_session.set("ui_thread_id", forced_thread_id)
+            active_ui_thread_id = forced_thread_id
+        entries = _THREAD_MEMORY.get((active_ui_thread_id or "").strip(), [])
+        if entries:
+            for item in entries:
+                role = item.get("role", "assistant")
+                author = "Kullanici" if role == "user" else "Asistan"
+                await cl.Message(content=item.get("content", ""), author=author).send()
+        else:
+            await cl.Message(content="Bu sohbete ait kayit bulunamadi.").send()
+        await _update_documents_sidebar(pipeline)
+        return
     if not query:
         return
     chat_style = _smalltalk_style(query)
@@ -758,6 +952,10 @@ async def on_message(message: cl.Message):
             await cl.Message(content="Belge moduna geçildi. Devam etmek için lütfen bir PDF/PNG/JPG yükle. (Sohbet için `/chat` yazabilirsin.)").send()
         await _update_documents_sidebar(pipeline)
         return
+
+    if not query.startswith("/"):
+        _append_chat_history_user_message(query)
+        _thread_memory_add(active_ui_thread_id, "user", query)
 
     # Auto small-talk: answer conversational messages even in doc mode.
     if _looks_like_smalltalk(query):
@@ -782,6 +980,8 @@ async def on_message(message: cl.Message):
             return
         await thinking_msg.remove()
         await _stream_text_response(answer)
+        _thread_memory_add(active_ui_thread_id, "assistant", answer)
+        await _update_documents_sidebar(pipeline)
         return
 
     # Commands (document-agnostic)
@@ -846,25 +1046,29 @@ async def on_message(message: cl.Message):
                 return
             await thinking_msg.remove()
             await _stream_text_response(answer)
+            _thread_memory_add(active_ui_thread_id, "assistant", answer)
+            await _update_documents_sidebar(pipeline)
             return
 
     mode = cl.user_session.get("mode") or mode
     # Doc mode requires documents
     if not pipeline.has_documents:
-        await cl.Message(
-            content="Henuz belge yuklenmedi. Lutfen once bir belge yukleyin. (Sohbet için `/chat` yazabilirsin.)"
-        ).send()
+        no_doc_msg = "Henuz belge yuklenmedi. Lutfen once bir belge yukleyin. (Sohbet için `/chat` yazabilirsin.)"
+        await cl.Message(content=no_doc_msg).send()
+        _thread_memory_add(active_ui_thread_id, "assistant", no_doc_msg)
+        await _update_documents_sidebar(pipeline)
         return
     if not pipeline.has_index:
-        await cl.Message(
-            content=(
-                "Bu oturumda yuklenen belgelerden indeks olusturulamadi (metin cikarimi bos olabilir veya OCR/VLM gerekir).\n\n"
-                "- PDF/PNG/JPG’yi tekrar yuklemeyi dene\n"
-                "- Taranmis (image-only) PDF ise OCR kurulu oldugundan emin ol (README → OCR)\n"
-                "- (Opsiyonel) VLM aciksa VLM_MAX_PAGES limitini kontrol et\n\n"
-                "Sohbet için `/chat` yazabilirsin."
-            )
-        ).send()
+        no_index_msg = (
+            "Bu oturumda yuklenen belgelerden indeks olusturulamadi (metin cikarimi bos olabilir veya OCR/VLM gerekir).\n\n"
+            "- PDF/PNG/JPG’yi tekrar yuklemeyi dene\n"
+            "- Taranmis (image-only) PDF ise OCR kurulu oldugundan emin ol (README → OCR)\n"
+            "- (Opsiyonel) VLM aciksa VLM_MAX_PAGES limitini kontrol et\n\n"
+            "Sohbet için `/chat` yazabilirsin."
+        )
+        await cl.Message(content=no_index_msg).send()
+        _thread_memory_add(active_ui_thread_id, "assistant", no_index_msg)
+        await _update_documents_sidebar(pipeline)
         return
 
     # Show thinking indicator
@@ -873,7 +1077,9 @@ async def on_message(message: cl.Message):
 
     # Generate and stream answer (real token stream when provider supports it)
     try:
-        await _stream_doc_answer_live(pipeline, query, mode, thinking_msg=thinking_msg)
+        result = await _stream_doc_answer_live(pipeline, query, mode, thinking_msg=thinking_msg)
+        _thread_memory_add(active_ui_thread_id, "assistant", result.answer)
+        await _update_documents_sidebar(pipeline)
     except Exception as e:
         try:
             await thinking_msg.remove()

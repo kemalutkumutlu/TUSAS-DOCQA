@@ -115,7 +115,7 @@ Bu dosya, projenin gelistirme surecini kronolojik olarak belgelemektedir.
 
 ## Faz 6.2 — GPU notu (embedding hizlandirma)
 - GPU, bu projede **yalnizca embedding** tarafinda etkilidir (SentenceTransformers / PyTorch).
-- Gemini LLM/VLM API cagirilari uzak servis oldugu icin GPU ile hizlanmaz.
+- Gemini/OpenAI LLM API (ve Gemini VLM API) uzak servis oldugu icin GPU ile hizlanmaz.
 - README'ye “GPU notu + runtime device dogrulama” komutu eklendi.
 
 ## Faz 6.3 — Klasor Test Suite + JSONL Loglama (opsiyonel, bozmadan)
@@ -359,13 +359,16 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - Baseline gate ve diger LLM-free testler etkilenmez
 
 ### 10.6 — Not (UI)
-- Arayuz, local LLM implementasyonu bitis halinde tutuldu: basit karsilama, basit dosya yukleme, cevaplarda her zaman Debug Bilgisi detayi. Durum Paneli, Chat Settings ve tema dosyalari (stylesheet/theme.json) geri alindi.
+- UI, Chainlit tabanli olup `.chainlit/config.toml` ve `public/` altindaki tema/static dosyalarla ozellestirilir.
+- Uygulama acilisinda otomatik karsilama mesaji gonderilmez (ilk layout "jump" etkisini azaltmak icin).
+- Sol tarafta (desktop) tarayici `localStorage` kullanan mini "Gecmis Sohbetler" paneli vardir (`public/history_sidebar.js`).
+- Sol ust profil secicisi ile LLM provider secilebilir (Gemini/OpenAI/Local/Extractive); retrieval/indeksleme mantigi degismez.
 
 ### 10.7 — Performans Aciklamasi (Dosya Isleme Suresi) ve Tradeoff'lar
 - Dokumantasyona "dosya isleme neden yuksek olabilir?" bolumu eklendi (`README.md`).
 - Netlestirilen noktalar:
   - Ingestion tarafi kalite-oncelikli: OCR + (opsiyonel) VLM + dual-quality secimi, bu nedenle ilk index suresi artabilir.
-  - GPU sadece embedding hizlandirir; Gemini LLM/VLM API cagrilari uzak servis oldugu icin GPU'dan faydalanmaz.
+  - GPU sadece embedding hizlandirir; Gemini/OpenAI LLM API (ve Gemini VLM API) uzak servis oldugu icin GPU'dan faydalanmaz.
   - `VLM_MODE=force` kaliteyi artirir ama latency/maliyet tradeoff'u vardir.
 - Onerilen hiz/kalite dengesi profili dokumante edildi:
   - `VLM_MODE=auto`

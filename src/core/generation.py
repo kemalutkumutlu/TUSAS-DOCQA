@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import re
 import time
+import json
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
@@ -18,6 +21,139 @@ from google import genai
 from google.genai import types
 
 from .retrieval import CoverageInfo, Evidence, QueryIntent, RetrievalResult
+
+
+def _openai_retryable(e: Exception) -> bool:
+    msg = str(e)
+    return any(
+        s in msg
+        for s in (
+            "503",
+            "502",
+            "504",
+            "429",
+            "500",
+            "timed out",
+            "Timeout",
+            "Connection reset",
+        )
+    )
+
+
+def _openai_chat_completion(
+    api_key: str,
+    model: str,
+    system_instruction: str,
+    user_contents: str,
+    temperature: float,
+    max_tokens: int = 4096,
+) -> str:
+    """
+    Minimal OpenAI Chat Completions call via stdlib urllib (no extra dependency).
+    """
+    url = "https://api.openai.com/v1/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_contents},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    last_err: Optional[Exception] = None
+    for attempt in range(1, 5):
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            return (((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        except Exception as e:
+            last_err = e
+            if attempt >= 4 or not _openai_retryable(e):
+                raise
+            time.sleep(min(12.0, 1.5 * (2 ** (attempt - 1))))
+    raise last_err  # type: ignore[misc]
+
+
+def _openai_chat_completion_stream(
+    api_key: str,
+    model: str,
+    system_instruction: str,
+    user_contents: str,
+    temperature: float,
+    max_tokens: int = 4096,
+    on_token: Optional[Callable[[str], None]] = None,
+) -> str:
+    """
+    OpenAI streaming call (SSE data lines) with token callback.
+    Returns full accumulated answer text.
+    """
+    url = "https://api.openai.com/v1/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_contents},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+
+    def _emit(tok: str) -> None:
+        if on_token and tok:
+            try:
+                on_token(tok)
+            except Exception:
+                pass
+
+    text_parts: list[str] = []
+    last_err: Optional[Exception] = None
+    for attempt in range(1, 5):
+        emitted_any = bool(text_parts)
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", errors="ignore").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    evt = json.loads(data)
+                    tok = (((evt.get("choices") or [{}])[0].get("delta") or {}).get("content") or "")
+                    if tok:
+                        text_parts.append(tok)
+                        _emit(tok)
+                        emitted_any = True
+                return "".join(text_parts).strip()
+        except Exception as e:
+            last_err = e
+            if attempt >= 4 or emitted_any or not _openai_retryable(e):
+                raise
+            time.sleep(min(12.0, 1.5 * (2 ** (attempt - 1))))
+
+    raise last_err  # type: ignore[misc]
 
 
 # ── System prompts ───────────────────────────────────────────────────────────
@@ -475,6 +611,38 @@ def generate_chat_answer(
     raise last_err  # type: ignore[misc]
 
 
+def generate_chat_answer_openai(
+    query: str,
+    openai_api_key: str,
+    openai_model: str = "gpt-4o-mini",
+    chat_style: str = "neutral",
+) -> str:
+    """
+    Chat-only generation via OpenAI Chat Completions.
+    """
+    last_err: Optional[Exception] = None
+    for attempt in range(1, 5):
+        try:
+            return (
+                _openai_chat_completion(
+                    api_key=openai_api_key,
+                    model=openai_model,
+                    system_instruction=_CHAT_SYSTEM_PROMPT + _chat_style_addendum(chat_style) + _language_addendum(query),
+                    user_contents=f"SORU: {query}",
+                    temperature=0.4,
+                    max_tokens=1024,
+                )
+                or "Anlayamadım, tekrar eder misin?"
+            )
+        except Exception as e:
+            last_err = e
+            if attempt >= 4 or not _openai_retryable(e):
+                raise
+            time.sleep(min(12.0, 1.5 * (2 ** (attempt - 1))))
+
+    raise last_err  # type: ignore[misc]
+
+
 # ── Main generation function ─────────────────────────────────────────────────
 
 def generate_answer(
@@ -650,6 +818,143 @@ def generate_answer(
     )
 
 
+def generate_answer_openai(
+    retrieval: RetrievalResult,
+    query: str,
+    openai_api_key: str,
+    openai_model: str = "gpt-4o-mini",
+) -> GenerationResult:
+    """
+    OpenAI variant of generate_answer() with the same guardrails/retries.
+    """
+    if not retrieval.evidences:
+        return GenerationResult(
+            answer="Belgede bu bilgi bulunamadı.",
+            citations_found=0,
+            coverage_expected=None,
+            coverage_actual=None,
+            coverage_ok=None,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    deterministic = _render_deterministic_section_list(retrieval)
+    if deterministic:
+        citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", deterministic)) + len(
+            re.findall(r"\[[^\]]*?/\s*\d+\s*\]", deterministic)
+        )
+        expected = retrieval.coverage.expected_items if retrieval.coverage else None
+        actual = _count_answer_items(deterministic) if expected is not None else None
+        ok = (actual >= expected) if (expected is not None and actual is not None) else None
+        return GenerationResult(
+            answer=deterministic,
+            citations_found=citations_found,
+            coverage_expected=expected,
+            coverage_actual=actual,
+            coverage_ok=ok,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    context = _build_context(retrieval.evidences)
+    system = _SYSTEM_PROMPT_BASE + _language_addendum(query)
+    coverage_expected: Optional[int] = None
+    if retrieval.intent == "section_list" and retrieval.coverage:
+        coverage_expected = retrieval.coverage.expected_items
+        system += _SECTION_LIST_ADDENDUM.format(expected=coverage_expected)
+
+    user_message = (
+        f"BAĞLAM:\n{context}\n\n"
+        f"---\n\n"
+        f"SORU: {query}"
+    )
+
+    answer = _openai_chat_completion(
+        api_key=openai_api_key,
+        model=openai_model,
+        system_instruction=system,
+        user_contents=user_message,
+        temperature=0.1,
+        max_tokens=4096,
+    ) or "Belgede bu bilgi bulunamadı."
+
+    citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+        re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+    )
+
+    if citations_found == 0 and retrieval.evidences and answer.strip() != "Belgede bu bilgi bulunamadı.":
+        system_retry = (
+            system
+            + "\n\nFORMAT DÜZELTME MODU:\n"
+            + "- Sadece cevabı yeniden yaz.\n"
+            + "- Her cümle/madde sonunda mutlaka [DosyaAdı - Sayfa X] kaynak formatı olsun.\n"
+            + "- Kaynaksız hiçbir cümle yazma.\n"
+            + "- İçerik ekleme/çıkarma yapma; sadece formatı düzelt.\n"
+        )
+        answer_retry = _openai_chat_completion(
+            api_key=openai_api_key,
+            model=openai_model,
+            system_instruction=system_retry,
+            user_contents=user_message,
+            temperature=0.0,
+            max_tokens=4096,
+        ).strip()
+        if answer_retry:
+            answer = answer_retry
+            citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+                re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+            )
+
+    coverage_actual: Optional[int] = None
+    coverage_ok: Optional[bool] = None
+    if coverage_expected is not None:
+        coverage_actual = _count_answer_items(answer)
+        coverage_ok = coverage_actual >= coverage_expected
+
+        if not coverage_ok and retrieval.evidences and answer.strip() != "Belgede bu bilgi bulunamadı.":
+            system_retry2 = (
+                system
+                + "\n\nKAPSAM DÜZELTME MODU:\n"
+                + f"- Bağlamda {coverage_expected} madde tespit edildi.\n"
+                + f"- Cevabında EN AZ {coverage_expected} madde/satır olmalı.\n"
+                + "- Her maddeyi ayrı satırda ver.\n"
+                + "- Özetleme yapma; bağlamdaki öğeleri tek tek dök.\n"
+                + "- Her satırın sonunda kaynak formatı olsun: [DosyaAdı - Sayfa X]\n"
+            )
+            answer_retry2 = _openai_chat_completion(
+                api_key=openai_api_key,
+                model=openai_model,
+                system_instruction=system_retry2,
+                user_contents=user_message,
+                temperature=0.0,
+                max_tokens=4096,
+            ).strip()
+            if answer_retry2:
+                answer = answer_retry2
+                citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+                    re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+                )
+                coverage_actual = _count_answer_items(answer)
+                coverage_ok = coverage_actual >= coverage_expected
+
+        if not coverage_ok:
+            answer += (
+                f"\n\n⚠️ **Kapsam Uyarısı**: Bağlamda bu bölümde {coverage_expected} "
+                f"madde tespit edildi, ancak cevapta {coverage_actual} madde var. "
+                f"Lütfen cevabı kontrol edin."
+            )
+
+    return GenerationResult(
+        answer=answer,
+        citations_found=citations_found,
+        coverage_expected=coverage_expected,
+        coverage_actual=coverage_actual,
+        coverage_ok=coverage_ok,
+        intent=retrieval.intent,
+        context_preview=context[:500],
+    )
+
+
 # ── Streaming generation (token callback) ───────────────────────────────────
 
 def generate_answer_stream(
@@ -737,6 +1042,107 @@ def generate_answer_stream(
             _emit(token)
 
     answer = "".join(chunks).strip() or "Belgede bu bilgi bulunamadı."
+
+    citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
+        re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
+    )
+
+    coverage_actual: Optional[int] = None
+    coverage_ok: Optional[bool] = None
+    if coverage_expected is not None:
+        coverage_actual = _count_answer_items(answer)
+        coverage_ok = coverage_actual >= coverage_expected
+        if coverage_ok is False:
+            warning = (
+                f"\n\n⚠️ **Kapsam Uyarısı**: Bağlamda bu bölümde {coverage_expected} "
+                f"madde tespit edildi, ancak cevapta {coverage_actual} madde var. "
+                f"Lütfen cevabı kontrol edin."
+            )
+            answer += warning
+            _emit(warning)
+
+    return GenerationResult(
+        answer=answer,
+        citations_found=citations_found,
+        coverage_expected=coverage_expected,
+        coverage_actual=coverage_actual,
+        coverage_ok=coverage_ok,
+        intent=retrieval.intent,
+        context_preview=context[:500],
+    )
+
+
+def generate_answer_openai_stream(
+    retrieval: RetrievalResult,
+    query: str,
+    openai_api_key: str,
+    openai_model: str = "gpt-4o-mini",
+    on_token: Optional[Callable[[str], None]] = None,
+) -> GenerationResult:
+    """
+    Streaming OpenAI variant for token-by-token UI rendering.
+    """
+    def _emit(text: str) -> None:
+        if on_token and text:
+            try:
+                on_token(text)
+            except Exception:
+                pass
+
+    if not retrieval.evidences:
+        answer = "Belgede bu bilgi bulunamadı."
+        _emit(answer)
+        return GenerationResult(
+            answer=answer,
+            citations_found=0,
+            coverage_expected=None,
+            coverage_actual=None,
+            coverage_ok=None,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    deterministic = _render_deterministic_section_list(retrieval)
+    if deterministic:
+        _emit(deterministic)
+        citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", deterministic)) + len(
+            re.findall(r"\[[^\]]*?/\s*\d+\s*\]", deterministic)
+        )
+        expected = retrieval.coverage.expected_items if retrieval.coverage else None
+        actual = _count_answer_items(deterministic) if expected is not None else None
+        ok = (actual >= expected) if (expected is not None and actual is not None) else None
+        return GenerationResult(
+            answer=deterministic,
+            citations_found=citations_found,
+            coverage_expected=expected,
+            coverage_actual=actual,
+            coverage_ok=ok,
+            intent=retrieval.intent,
+            context_preview="",
+        )
+
+    context = _build_context(retrieval.evidences)
+    system = _SYSTEM_PROMPT_BASE + _language_addendum(query)
+    coverage_expected: Optional[int] = None
+    if retrieval.intent == "section_list" and retrieval.coverage:
+        coverage_expected = retrieval.coverage.expected_items
+        system += _SECTION_LIST_ADDENDUM.format(expected=coverage_expected)
+
+    user_message = (
+        f"BAĞLAM:\n{context}\n\n"
+        f"---\n\n"
+        f"SORU: {query}"
+    )
+
+    answer = _openai_chat_completion_stream(
+        api_key=openai_api_key,
+        model=openai_model,
+        system_instruction=system,
+        user_contents=user_message,
+        temperature=0.1,
+        max_tokens=4096,
+        on_token=_emit,
+    ) or "Belgede bu bilgi bulunamadı."
 
     citations_found = len(re.findall(r"\[[^\]]*?\bSayfa\s*\d+[^\]]*?\]", answer)) + len(
         re.findall(r"\[[^\]]*?/\s*\d+\s*\]", answer)
