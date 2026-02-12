@@ -52,6 +52,27 @@ PDF/Image ─→ Ingestion ─→ Structure ─→ Chunking ─→ Indexing ─�
 
 ## Kurulum (Windows)
 
+### Kurulum Paketi (Checklist)
+
+Bu repo, baskalarinin kolayca kurup calistirabilmesi icin gerekli dosyalari “kurulum paketi” gibi birlikte sunar:
+
+- Python bagimliliklari: `requirements.txt`
+- Ornek konfigurasyon: `.env.example` (lokalde `.env` kullanin)
+- Tekrar-kosulabilir test/benchmark scriptleri: `scripts/` (ozellikle `scripts/baseline_gate.py`)
+- (Opsiyonel) GPU kurulum/dogrulama rehberi: `GPU_REQUIREMENTS.md` (CPU `.venv` + GPU `.venv-gpu` ayrimi)
+- (Opsiyonel) Docker kurulum paketi: `Dockerfile` + `docker-compose.yml` + `.dockerignore`
+
+Minimum calisan profil (API anahtari yok):
+
+- `LLM_PROVIDER=none` (extractive) veya
+- `LLM_PROVIDER=local` / `VLM_PROVIDER=local` (Ollama ile tamamen offline)
+
+Opsiyonel bilesenler:
+
+- OCR icin Tesseract (scan PDF / JPG/PNG): bkz. asagidaki `OCR` bolumu
+- Embedding hizlandirma icin NVIDIA GPU + CUDA uyumlu PyTorch: bkz. `GPU_REQUIREMENTS.md`
+- Online kalite/acceptance eval icin Gemini: `LLM_PROVIDER=gemini` + `GEMINI_API_KEY`
+
 ### 1) Sanal Ortam
 
 ```bash
@@ -59,6 +80,43 @@ python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+### (Opsiyonel) Docker ile Calistirma
+
+Docker kurulumu olan ortamlarda (Docker Desktop/WSL2 vb.):
+
+```bash
+docker compose up --build
+```
+
+Ardindan tarayicida `http://localhost:8000` acin.
+
+Docker icinden hizli regresyon testi:
+
+```bash
+docker compose run --rm docqa python scripts/baseline_gate.py
+```
+
+Docker icinden retrieval kalite testi:
+
+```bash
+docker compose run --rm docqa python scripts/eval_retrieval.py --pdf Case_Study_20260205.pdf
+```
+
+Gelistirici modu (kaynak kod bind mount, rebuild gerektirmeden calistirma):
+
+```bash
+docker compose run --rm -p 8000:8000 -v .:/app docqa python -m chainlit run app.py -w --host 0.0.0.0 --port 8000
+```
+
+Notlar:
+
+- Varsayilan `docker-compose.yml` profili **LLM-free** (extractive) calisir: `LLM_PROVIDER=none`, `VLM_MODE=off`.
+- Docker Desktop **calisiyor** olmali ve Linux container engine acik olmali.
+  - `failed to connect ... dockerDesktopLinuxEngine` gorurseniz Docker Desktop’tan **Switch to Linux containers** secin.
+- Local (Ollama) mod kullanacaksaniz, Docker icinden host’taki Ollama’ya erismek icin genelde `OLLAMA_BASE_URL=http://host.docker.internal:11434` gerekir (OS’a gore degisebilir).
+- Eger `.env` icinde `$` karakteri olan bir deger kullaniyorsaniz (ornegin bir secret), Docker Compose bunu degisken gibi yorumlayabilir.
+  - Cozum: `$` karakterini `$$` olarak escape edin veya Docker icin ayri bir env dosyasi kullanin.
 
 ### (Opsiyonel) GPU Notu (Embedding Hizlandirma)
 
@@ -140,6 +198,13 @@ GEMINI_MODEL=gemini-2.0-flash
 
 > Guvenlik: `GEMINI_API_KEY` degerini repo'ya commit etmeyin. Sadece lokal `.env`'de tutun.
 
+#### Neden Gemini? (Online Mod)
+
+- Bu projede “online” varsayilan entegrasyon **Gemini** olarak secildi, cunku:
+  - **VLM (multimodal, extract-only)** ile tablo/cok-kolon gibi karmasik layout'larda metin cikarimi kalitesi belirgin artiyor (OCR tek basina yeterli olmayabiliyor).
+  - Kabul testleri/CI akisinda `GEMINI_API_KEY` varsa `eval_case_study.py` ile otomatik dogrulama yapilabiliyor.
+  - Tamamen yerel ihtiyac icin ayri bir yol da mevcut: `LLM_PROVIDER=local` / `VLM_PROVIDER=local` (Ollama).
+
 #### (Opsiyonel) LLM'siz Calistirma (Extractive Mod)
 
 LLM API anahtari olmadan da sistemi kullanabilirsiniz. Bu modda cevaplar belgeden dogrudan alinti olarak dondurulur:
@@ -183,8 +248,34 @@ OLLAMA_TIMEOUT=120
 ollama list
 ```
 
+#### Baska Bir Modelle Calistirma (OpenAI/Gemini Haric)
+
+- Text LLM degistirmek icin:
+  - `ollama pull <model_adi>`
+  - `.env` icinde `OLLAMA_LLM_MODEL=<model_adi>` guncelleyin
+- Vision/VLM degistirmek icin:
+  - `ollama pull <vlm_model_adi>`
+  - `.env` icinde `OLLAMA_VLM_MODEL=<vlm_model_adi>` guncelleyin
+- Tamamen “key'siz” calisma:
+  - `LLM_PROVIDER=local` (veya LLM istemiyorsaniz `LLM_PROVIDER=none`)
+  - Dis API kullanmamak icin `VLM_MODE=off` (Gemini VLM extract-only kapali)
+
 > **GPU Notu**: GTX 1660 Super (6 GB VRAM) ile `qwen2.5:7b` (Q4 quantize) ve `llava:7b` calistirilabilir.
 > Daha fazla VRAM'e sahip GPU'larda daha buyuk modeller (13B vb.) kullanilabilir.
+>
+> **VRAM neden onemli?**
+> - Modelin GPU'ya sigip sigmayacagini belirler (ozellikle local LLM/VLM tarafinda).
+> - Daha uzun context ve daha stabil token hizlari icin VRAM baskisi kritik olur.
+> - VRAM yetersizse model CPU'ya offload olabilir; bu da latency'yi belirgin artirir.
+>
+> **Neden kucuk local model secildi?**
+> - Referans yerel donanim (GTX 1660 SUPER, 6 GB VRAM) dusuk/orta seviye oldugu icin 7B sinifi (Q4) modeller secildi.
+> - Amac: Sistemin **tamamen offline** (dis API olmadan) calisabildigini pratikte gostermek.
+>
+> **Buyuk acik modellerde (ornegin 100B+ sinifi, `gpt-oss-120b` gibi) quantization/OOM neden kritik?**
+> - Model agirliklari buyudukce VRAM/RAM ihtiyaci katlanir; pratikte quantization (Q4/Q5 vb.) olmadan lokal calistirmak zorlasir.
+> - OOM (out-of-memory) yalnizca agirliklardan degil, **context/KV cache** ve eszamanli istek sayisindan da kaynaklanabilir.
+> - OOM durumunda model ya calismaz ya da CPU offload'a dusup belirgin performans dususu yasatir.
 >
 > **Onemli**: Local mod aktifken `GEMINI_API_KEY` zorunlu degildir. Embedding her zaman lokal SentenceTransformers ile yapilir.
 >
@@ -209,6 +300,42 @@ Isterseniz `.env` icinde degistirebilirsiniz:
 VLM_MODE=off
 VLM_MAX_PAGES=50
 ```
+
+### 3.2) Dosya Isleme Suresi Neden Yuksek Olabilir?
+
+Bu projede ingestion tarafi bilincli olarak **kalite-oncelikli** tasarlanmistir. Bu nedenle bazi profillerde
+ilk yukleme suresi yuksek olabilir.
+
+- **Ana maliyet kalemleri**
+  - Sayfa bazli OCR + (opsiyonel) VLM extract cagrilari (ozellikle `VLM_MODE=force` iken)
+  - OCR/VLM adaylari arasinda dual-quality secimi (yapi/heading korunumu daha iyi olani secme)
+  - Chunk embedding (ilk calistirmada model indirme + embedding hesaplama)
+- **GPU beklentisi**
+  - GPU bu projede sadece embedding tarafini hizlandirir.
+  - Gemini LLM/VLM API cagrilari uzak servis oldugu icin GPU ile hizlanmaz.
+
+#### Bu projede kalite icin verilen tradeoff'lar
+
+- `VLM_MODE=force`: Layout/tablo kalite kazanimi icin latency ve API maliyeti artisini kabul eder.
+- Dual-quality secim (PDF/OCR/VLM): Tek yol yerine en iyi metin/yapi secildigi icin kalite artar, sure uzar.
+- Deterministic section-list + coverage guard: Cevap kalitesi ve eksiksizlik icin generation tarafinda ek kontrol uygulanir.
+
+#### Hizlandirmak icin onerilen profil (kaliteyi makul koruyarak)
+
+```ini
+VLM_MODE=auto
+VLM_MAX_PAGES=10
+EMBEDDING_DEVICE=auto
+```
+
+- `VLM_MODE=auto`: VLM sadece dusuk kalite text sayfalarinda devreye girer.
+- `VLM_MAX_PAGES`: VLM cagrilarini sinirlayarak ilk index suresini dusurur.
+- `EMBEDDING_DEVICE=auto`: CUDA varsa embedding'i GPU'ya alir.
+
+#### Notlar
+
+- Ayni dosya ayni ayarlarla ayni oturumda tekrar yuklenirse reprocess skip edilir (hizli aktif belge secimi).
+- Incremental indexing sayesinde yeni belge eklenince onceki belgeler tekrar embed edilmez.
 
 ### 4) Uygulamayi Baslatin
 
@@ -261,14 +388,14 @@ python scripts/baseline_gate.py
 python scripts/eval_retrieval.py --pdf Case_Study_20260205.pdf
 ```
 
-Son calistirma sonuclari (2026-02-11):
+Son calistirma sonuclari (guncel kosu):
 
 ```
 Intent Accuracy : 25/25 (100%)
-Heading Hit     : 14/15 (93%)
-Section Hit     : 5/6  (83%)
-Evidence Met    : 24/25 (96%)
-Avg Latency     : 29 ms
+Heading Hit     : 15/15 (100%)
+Section Hit     : 6/6  (100%)
+Evidence Met    : 25/25 (100%)
+Avg Latency     : 19 ms
 ```
 
 ### Halusinasyon Testi (Gemini gerekir)

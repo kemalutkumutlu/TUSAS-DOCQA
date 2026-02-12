@@ -1,0 +1,18 @@
+services:
+  docqa:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Safe defaults for a first-run container:
+      # - No external API key required
+      # - VLM disabled (otherwise VLM_MODE=force would require GEMINI_API_KEY)
+      LLM_PROVIDER: "none"
+      VLM_MODE: "off"
+      DATA_DIR: "/app/data"
+      CHROMA_DIR: "/app/data/chroma"
+      CHAINLIT_DB_PATH: "/app/data/chainlit_history.db"
+      # Persist HF model downloads under the mounted data volume
+      HF_HOME: "/app/data/hf_home"
+    volumes:
+      - ./data:/app/data

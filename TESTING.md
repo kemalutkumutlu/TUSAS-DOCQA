@@ -59,12 +59,10 @@ python scripts/eval_retrieval.py --pdf test_data/Case_Study_20260205.pdf
 | Metrik | Deger | Aciklama |
 |--------|-------|----------|
 | Intent Accuracy | 25/25 (100%) | Sorgu tipini (section_list / normal_qa) dogru tespit |
-| Heading Hit | 14/15 (93%) | Beklenen baslik retrieval'da bulunuyor |
-| Section Hit | 5/6 (83%) | Beklenen section key retrieval'da mevcut |
-| Evidence Met | 24/25 (96%) | Minimum evidence sayisi saglanmis |
-| Avg Latency | 29 ms | Retrieval suresi (embedding + Chroma + BM25 + RRF) |
-
-> 1 basarisiz: "list all deliverables" (EN sorgu) - section_list routing dogru ama retrieval'da section key 4 yerine farkli eslesme. Bu, Ingilizce sorgunun Turkce baslik ile eslesme zorlugunu gosterir.
+| Heading Hit | 15/15 (100%) | Beklenen baslik retrieval'da bulunuyor |
+| Section Hit | 6/6 (100%) | Beklenen section key retrieval'da mevcut |
+| Evidence Met | 25/25 (100%) | Minimum evidence sayisi saglanmis |
+| Avg Latency | 19 ms | Retrieval suresi (embedding + Chroma + BM25 + RRF) |
 
 ### 0.4 Klasor suite (coklu PDF)
 
@@ -335,10 +333,10 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | Kategori | Metrik | Deger |
 |----------|--------|-------|
 | **Retrieval** | Intent Accuracy | 100% (25/25) |
-| | Heading Hit | 93% (14/15) |
-| | Section Hit | 83% (5/6) |
-| | Evidence Met | 96% (24/25) |
-| | Avg Retrieval Latency | 29 ms |
+| | Heading Hit | 100% (15/15) |
+| | Section Hit | 100% (6/6) |
+| | Evidence Met | 100% (25/25) |
+| | Avg Retrieval Latency | 19 ms |
 | **Generation** | Citation Compliance | 100% (10/10 pozitif sorgu) |
 | | Keyword Accuracy | 100% (10/10 pozitif sorgu) |
 | **Halusinasyon** | Pozitif Dogru Yanit | 100% (10/10) |
@@ -353,6 +351,24 @@ Her push/PR'da otomatik calisir (`.github/workflows/ci.yml`):
 | | Toplam Chunk | 192 |
 | | Folder Suite Retrieval | 32/32 (100%) |
 | | Folder Suite Ask | 12/12 (100%) |
+
+### 8.1 Performance Notes (Dosya Isleme Suresi)
+
+- Neden yuksek olabilir?
+  - Ingestion kalite-oncelikli calisir: OCR + (opsiyonel) VLM + dual-quality secimi birlikte kullanilir.
+  - `VLM_MODE=force` profilinde sayfa basi VLM cagrilari arttigi icin index suresi belirgin uzayabilir.
+  - Embedding maliyeti ilk indexte yuksektir (ilk calistirmada model indirme de sureye eklenir).
+- Mevcut hizlandirma mekanizmalari:
+  - Ayni dosya + ayni ayar -> reprocess skip (session-level doc_id + fingerprint).
+  - Incremental indexing -> sadece yeni chunk'lar embed edilir.
+  - VLM sayfa limiti (`VLM_MAX_PAGES`) ile maliyet ve sure kontrol edilir.
+- Kalite icin bilincli tradeoff:
+  - Proje hizdan once kalite/hedef-dogruluk odaklidir (citation uyumu, coverage ve halusinasyon kontrolu).
+  - Bu nedenle ingestion tarafinda daha maliyetli ama daha guvenilir yol secilmistir.
+- Hiz/kalite denge onerisi (dokumante profil):
+  - `VLM_MODE=auto`
+  - `VLM_MAX_PAGES=10` (belge tipine gore ayarlanabilir)
+  - `EMBEDDING_DEVICE=auto` (GPU varsa embedding hizlanir)
 
 ---
 

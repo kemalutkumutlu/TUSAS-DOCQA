@@ -351,6 +351,7 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 - Text LLM: `qwen2.5:7b` (Q4 quantize, ~4.5 GB VRAM)
 - Vision VLM: `llava:7b` (Q4 quantize, ~5 GB VRAM)
 - Not: Ollama modeller arasi dinamik VRAM yonetimi yapar; ayni anda ikisi yuklenmez
+- Gerekce: Referans GPU dusuk/orta seviye oldugu icin (6 GB VRAM), burada hedef "en buyuk open-source modeli kosmak" degil; sistemin **tam offline** calisabildigini gosterecek pratik bir baseline secmekti.
 
 ### 10.5 — Geriye Uyumluluk
 - Tum yeni alanlar varsayilan degerlere sahip; mevcut `.env` dosyalari ve scriptler **degisiklik gerektirmeden** calisir
@@ -359,6 +360,30 @@ Bu bolum her fazda degerlendirilen alternatifleri ve neden mevcut yolu sectigimi
 
 ### 10.6 — Not (UI)
 - Arayuz, local LLM implementasyonu bitis halinde tutuldu: basit karsilama, basit dosya yukleme, cevaplarda her zaman Debug Bilgisi detayi. Durum Paneli, Chat Settings ve tema dosyalari (stylesheet/theme.json) geri alindi.
+
+### 10.7 — Performans Aciklamasi (Dosya Isleme Suresi) ve Tradeoff'lar
+- Dokumantasyona "dosya isleme neden yuksek olabilir?" bolumu eklendi (`README.md`).
+- Netlestirilen noktalar:
+  - Ingestion tarafi kalite-oncelikli: OCR + (opsiyonel) VLM + dual-quality secimi, bu nedenle ilk index suresi artabilir.
+  - GPU sadece embedding hizlandirir; Gemini LLM/VLM API cagrilari uzak servis oldugu icin GPU'dan faydalanmaz.
+  - `VLM_MODE=force` kaliteyi artirir ama latency/maliyet tradeoff'u vardir.
+- Onerilen hiz/kalite dengesi profili dokumante edildi:
+  - `VLM_MODE=auto`
+  - `VLM_MAX_PAGES` dusurme (ornek: 10)
+  - `EMBEDDING_DEVICE=auto`
+- Mevcut hizlandirma mekanizmalari tekrar vurgulandi:
+  - Ayni dosya + ayni ayar -> skip reprocess
+  - Incremental indexing -> sadece yeni chunk embedding
+
+### 10.8 — Retrieval Metrik Guncellemesi + VRAM Dokumantasyonu
+- Retrieval metrikleri guncel kosuya gore revize edildi:
+  - Intent: 25/25
+  - Heading Hit: 15/15
+  - Section Hit: 6/6
+  - Evidence Met: 25/25
+  - Avg Latency: 19 ms
+- `README.md` ve `TESTING.md` tablolari yeni sonuclara gore guncellendi.
+- `GPU_REQUIREMENTS.md` icine local LLM/VLM (Ollama) icin VRAM'in neden kritik olduguna dair notlar eklendi.
 
 ## Sonraki Adimlar
 - ~~Retrieval kalitesi icin mini eval set + metrikler~~ -> TAMAM (Faz 7.2)

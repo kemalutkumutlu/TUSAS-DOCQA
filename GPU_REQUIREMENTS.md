@@ -1,11 +1,32 @@
 # GPU_REQUIREMENTS
 
-Bu proje GPU'yu **yalnizca embedding** (SentenceTransformers / PyTorch) tarafinda kullanir.
+Bu proje GPU'yu Python tarafinda **yalnizca embedding** (SentenceTransformers / PyTorch) icin kullanir.
 Gemini LLM/VLM API cagirilari uzak servis oldugu icin GPU ile hizlanmaz.
+
+> Not (Local mod): `LLM_PROVIDER=local` / `VLM_PROVIDER=local` iken Ollama kendi surecinde GPU kullanir.
+> Bu durumda VRAM kapasitesi local LLM/VLM performansi icin kritik hale gelir.
 
 ## Ne kazandirir?
 
 - PDF'ler ilk kez indexlenirken (chunk embedding) ve retrieval sirasinda query embedding uretilirken hizlanma.
+
+## Local LLM/VLM (Ollama) icin VRAM notu
+
+- VRAM, local modelin GPU'da calisip calisamayacagini belirler.
+- Daha buyuk model (veya daha uzun context) daha fazla VRAM ister.
+- VRAM yetersizse CPU offload olabilir; bu da token hizini ve cevap gecikmesini belirgin etkiler.
+- Pratikte 6 GB VRAM sinifinda 7B quantize modeller daha guvenli bir denge verir.
+
+## Model boyutu, quantization ve OOM (Local LLM/VLM)
+
+- Bu repo'nun referans GPU'su (GTX 1660 SUPER, 6 GB VRAM) dusuk/orta seviye oldugu icin, local modda amac "en buyuk modeli kosmak" degil; **tam offline calisma** yetenegini gostermektir.
+- Buyuk acik modellerde (ornegin 70B/120B sinifi; `gpt-oss-120b` gibi) quantization genellikle zorunlu hale gelir. Aksi halde model agirliklari VRAM/RAM'e sigmayabilir.
+- OOM (out-of-memory) sadece model agirliklarindan kaynaklanmaz:
+  - Context uzadiginda **KV cache** bellek kullanimi artar.
+  - Eszamanli istek/batch arttikca bellek baskisi artar.
+- OOM durumunda tipik sonuc:
+  - Model yuklenemez veya inference sirasinda hata verir
+  - veya CPU offload ile calisir (calisabilir ama hiz/latency ciddi etkilenir)
 
 ## Kurulum (Windows, onerilen yaklasim)
 
