@@ -433,11 +433,24 @@ CV dokümanı (`CV-ornek-muhendis.pdf`) geldiğinde iki ana sorun tespit ettik:
 - **Erken "Kötü Veri" Testi:** Sadece düzgün PDF'lerle değil, bozuk/OCR gerektiren PDF'lerle en başta test yapardım.
 - **Format Agnostik Parser:** Structure parser'ı sadece akademik/numaralı formatlara göre değil, CV gibi serbest formatlara göre baştan tasarlardım.
 
+
+### 12.7 — Dürüst Bir İtiraf: Test Verisindeki CV Dosyası
+`test_data/CV-ornek-muhendis.pdf` dosyasını yapısal olarak anlamlandırmakta **başarısız olduk**.
+- **Soru:** "Bizde zaten VLM (Görsel Model) yok mu?"
+- **Cevap:** Evet var, ancak şu an VLM'i **sadece metin okuma (OCR)** amacıyla kullanıyoruz. Metni okuduktan sonra başlıkları ayıran kod (`structure.py`) hala **Regex ve Kural Tabanlı**.
+- **Neden:** CV'de "1. İŞ DENEYİMİ" yazmaz, sadece koyu fontla "İŞ DENEYİMİ" yazar. Bizim regex parser numara aradığı için bu başlığı kaçırdı ve tüm CV'yi tek bir paragraf sandı.
+
+### 12.8 — Bugün Sıfırdan Başlasaydım Çözümüm Ne Olurdu?
+Eğer projeye bugün sıfırdan başlasaydım, CV gibi yapısal olmayan (unstructured) dokümanlar için hibrit değil, **Vision-First** bir pipeline kurardım:
+1. **Layout Analizi (VLM/Docling):** VLM'i sadece harfleri okumak için değil, **sayfa yapısını (JSON Tree)** çıkarmak için kullanırdım. (Örn: "Şu koordinattaki büyük yazıyı başlık yap").
+2. **Semantik Segmentasyon:** Başlıkları regex ile değil, görsel boyuta (font size/boldness) ve konuma göre ayırt eden bir model kullanırdım.
+3. **Format Dönüşümü:** OCR çıktısını doğrudan Markdown'a çeviren ve encoding hatalarını düzelten (LLM-based correction) bir ara katman eklerdim.
+
 ---
 
 ## Gelecek Vizyonu ve Teknoloji Yığını (Yol Haritası)
 
-Şu an projeye sıfırdan başlasaydık veya bir sonraki fazda neleri eklerdik:
+Şu an projeye sıfırdan başlasaydım veya bir sonraki fazda neleri eklerdim:
 
 ### A. Gelişmiş Ingestion (Veri Alma)
 - **Vision-Native Parsing (Docling v3):** Klasik PDF okuyucular yerine, dökümanı görsel olarak tarayıp tablo ve formülleri kusursuz Markdown formatına çeviren Docling v3 kullanılır.
